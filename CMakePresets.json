@@ -98,6 +98,18 @@
       }
     },
     {
+      "name": "gk7205v200-au",
+      "displayName": "GK7205V200 vehicle cross (RTL8812AU only)",
+      "binaryDir": "${sourceDir}/build/gk7205v200-au",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-gk7205v200.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "WBLINK_WERROR": "ON",
+        "WBLINK_DEVOURER_CHIPS": "au",
+        "DEVOURER_LOG_MAX_LEVEL": "WARN"
+      }
+    },
+    {
       "name": "android-arm64",
       "displayName": "Android arm64 / bionic (compile-only verify; radio ON, control server ON and -Werror are load-bearing, see CLAUDE.md)",
       "binaryDir": "${sourceDir}/build/android-arm64",
@@ -125,6 +137,7 @@
     { "name": "ssc338q-eu", "configurePreset": "ssc338q-eu" },
     { "name": "ssc378qe-au", "configurePreset": "ssc378qe-au" },
     { "name": "cv610", "configurePreset": "cv610" },
+    { "name": "gk7205v200-au", "configurePreset": "gk7205v200-au" },
     { "name": "android-arm64", "configurePreset": "android-arm64" }
   ],
   "testPresets": [

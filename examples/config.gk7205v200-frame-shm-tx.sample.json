@@ -1,0 +1,50 @@
+{
+  "node": {
+    "originator": 17,
+    "role": "tx",
+    "net_id": 0
+  },
+  "profile_table": "profiles/table.example.json",
+  "adapters": [
+    {
+      "name": "rtl8812au",
+      "bus": "",
+      "role": "tx",
+      "channel": 5805,
+      "bw": 20
+    }
+  ],
+  "streams": [
+    {
+      "stream_id": 0,
+      "stream_type": "RTP",
+      "dir": "in",
+      "bind": {
+        "kind": "frame-shm",
+        "name": "venc0"
+      }
+    }
+  ],
+  "air": {
+    "kind": "radio"
+  },
+  "policy": {
+    "select": {
+      "min_profile": 0,
+      "max_profile": 0
+    },
+    "return": {
+      "quiet_gap": true,
+      "guard_us": 300,
+      "return_window_us": 2000
+    }
+  },
+  "venc": {
+    "host": "127.0.0.1:80",
+    "enabled": false,
+    "recovery_enabled": false
+  },
+  "stats": {
+    "hz": 1
+  }
+}
