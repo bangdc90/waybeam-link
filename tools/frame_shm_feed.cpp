@@ -35,6 +35,7 @@
 
 #include "wblink/frame_shm.h"
 #include "wblink/frame_shm_format.h"
+#include "wblink/hevc_conceal.h"
 
 using namespace wblink;
 
@@ -311,6 +312,91 @@ int run_dump(const std::string& ring_name, const char* path, uint32_t idle_ms,
     return frames > 0 ? 0 : 1;
 }
 
+int run_stream(const std::string& ring_name) {
+    std::unique_ptr<FrameShmRing> ring;
+    while (!ring) {
+        auto r = FrameShmRing::attach(ring_name);
+        if (r) {
+            ring = std::move(*r.value);
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    std::vector<uint8_t> buf(ring->slot_data_size());
+    unsigned int parameter_sets = 0;
+    bool decoding = false;
+    bool have_previous_pts = false;
+    uint32_t previous_pts = 0;
+    constexpr uint32_t kExpectedFrameIntervalUs = 1000000u / 55u;
+    constexpr uint32_t kFrameGapThresholdUs =
+        kExpectedFrameIntervalUs + kExpectedFrameIntervalUs / 2u;
+    std::fprintf(stderr, "waiting for HEVC VPS/SPS/PPS and random-access frame\n");
+    for (;;) {
+        const long n = ring->read_frame(buf.data(), buf.size());
+        if (n > static_cast<long>(kVencFrameMetaSize)) {
+            VencFrameMeta meta;
+            if (read_frame_meta(buf.data(), static_cast<size_t>(n), &meta) &&
+                meta.codec == kFrameCodecH265) {
+                const uint32_t frame_delta = meta.pts - previous_pts;
+                const bool frame_gap = have_previous_pts &&
+                                       frame_delta > kFrameGapThresholdUs;
+                const bool salvaged =
+                    (meta.flags & kFrameFlagSalvaged) != 0;
+                if (decoding && (frame_gap || salvaged)) {
+                    decoding = false;
+                    parameter_sets = 0;
+                    if (frame_gap) {
+                        std::fprintf(stderr,
+                            "HEVC frame gap detected (%u us); "
+                            "waiting for next parameter sets and keyframe\n",
+                            frame_delta);
+                    } else {
+                        std::fprintf(stderr,
+                            "HEVC repaired frame detected; waiting for "
+                            "next parameter sets and keyframe\n");
+                    }
+                }
+                previous_pts = meta.pts;
+                have_previous_pts = true;
+                const size_t au = static_cast<size_t>(n) - kVencFrameMetaSize;
+                const uint8_t* payload = buf.data() + kVencFrameMetaSize;
+                std::vector<size_t> starts;
+                for (size_t offset = 0; offset + 3 <= au; ++offset) {
+                    if (payload[offset] == 0 && payload[offset + 1] == 0 &&
+                        payload[offset + 2] == 1) {
+                        starts.push_back(offset > 0 && payload[offset - 1] == 0
+                                             ? offset - 1 : offset);
+                        offset += 2;
+                    }
+                }
+                for (size_t index = 0; index < starts.size(); ++index) {
+                    const size_t start = starts[index];
+                    const size_t end = index + 1 < starts.size()
+                                           ? starts[index + 1] : au;
+                    const size_t header = start + (payload[start + 2] == 1 ? 3 : 4);
+                    if (header + 2 > end)
+                        continue;
+                    const uint8_t type = hevc::nal_type(payload + header);
+                    const bool parameter = type >= 32 && type <= 34;
+                    if (parameter)
+                        parameter_sets |= 1u << (type - 32);
+                    if (!decoding && parameter_sets == 7 && hevc::nal_is_irap(type)) {
+                        decoding = true;
+                        std::fprintf(stderr, "HEVC decoder startup ready\n");
+                    }
+                    if ((decoding || parameter) &&
+                        std::fwrite(payload + start, 1, end - start, stdout) != end - start)
+                        return 1;
+                }
+                if (std::fflush(stdout) != 0)
+                    return 1;
+            }
+            continue;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -344,12 +430,16 @@ int main(int argc, char** argv) {
                         static_cast<uint32_t>(std::atol(argv[4])),
                         static_cast<uint32_t>(std::atol(argv[5])));
     }
+    if (argc == 3 && std::strcmp(argv[1], "stream") == 0) {
+        return run_stream(argv[2]);
+    }
     std::fprintf(stderr,
                  "usage: %s produce <ring> <frames> <fps> <p_bytes> "
                  "<idr_every> [settle_ms]\n"
                  "       %s consume <ring> <min_frames> <idle_ms> <total_ms>\n"
                  "       %s play <ring> <file.265> <fps> [loops] [settle_ms]\n"
-                 "       %s dump <ring> <out.265> <idle_ms> <total_ms>\n",
-                 argv[0], argv[0], argv[0], argv[0]);
+                 "       %s dump <ring> <out.265> <idle_ms> <total_ms>\n"
+                 "       %s stream <ring> (raw HEVC to stdout)\n",
+                 argv[0], argv[0], argv[0], argv[0], argv[0]);
     return 2;
 }

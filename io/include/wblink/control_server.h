@@ -35,6 +35,12 @@ struct ControlHandlers {
     // §15.5a ground scout state (GET); null → 503 like the other reads.
     std::function<std::string()> scout_results;
     std::function<std::string()> selection_json;
+    // §15.5 (Pass 207) GET /api/v1/clock — §3.16 link clock-offset estimate.
+    std::function<std::string()> clock_json;
+    // §15.5 (Pass 208) GET /api/v1/uplink — ground uplink mute state.
+    std::function<std::string()> uplink_json;
+    // §15.5 (Pass 209) GET /api/v1/thermal — per-adapter chip thermal meter.
+    std::function<std::string()> thermal_json;
     std::function<std::string()> cache_assignment_json;
     // §11.7 issuer campaign state (GET; issuer/ground only, null → 409).
     std::function<std::string()> vehicle_command_json;
@@ -74,6 +80,10 @@ struct ControlHandlers {
     // window are fixed at bring-up). Volatile: a restart returns to
     // air.ack_responder. Returns "" on success, else the refusal.
     std::function<std::string(bool armed)> ack_responder_set;
+    // §15.5 (Pass 208) POST /api/v1/uplink {tx}: unmute (true) / mute (false)
+    // the ground uplink live; disarms a pending auto-mute. "" on success,
+    // else the refusal (no role:"tx" adapter).
+    std::function<std::string(bool tx)> uplink_set;
     // e_permille: §14.1a third class; nullopt = inherit p_permille. The
     // POST is a full replacement, so an omitted e_permille restores that.
     std::function<std::string(int stream_id, int i_permille, int p_permille,

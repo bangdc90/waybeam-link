@@ -20,6 +20,11 @@ constexpr void be32_write(uint8_t* p, uint32_t v) {
     p[3] = static_cast<uint8_t>(v & 0xFF);
 }
 
+constexpr void be64_write(uint8_t* p, uint64_t v) {
+    be32_write(p, static_cast<uint32_t>(v >> 32));
+    be32_write(p + 4, static_cast<uint32_t>(v));
+}
+
 constexpr uint16_t be16_read(const uint8_t* p) {
     return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) |
                                  static_cast<uint16_t>(p[1]));
@@ -30,6 +35,10 @@ constexpr uint32_t be32_read(const uint8_t* p) {
            (static_cast<uint32_t>(p[1]) << 16) |
            (static_cast<uint32_t>(p[2]) << 8) |
            static_cast<uint32_t>(p[3]);
+}
+
+constexpr uint64_t be64_read(const uint8_t* p) {
+    return (static_cast<uint64_t>(be32_read(p)) << 32) | be32_read(p + 4);
 }
 
 }  // namespace wblink

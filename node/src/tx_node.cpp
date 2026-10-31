@@ -371,6 +371,8 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
     // can overtake a staged one.
     StagedAir<AirBackend> sa(*air.value);
     uint64_t now_us_it = now_us();
+    uint64_t next_time_beacon_ms = 0;  // §3.16 Pass 208
+    uint32_t time_beacon_seq = 0;
     VideoSlotCadence selector_state_cadence(500);
     // §3.15 word while the feed is paused (Pass 153): with no live slots the
     // prepend below never fires, so a plain 2 Hz timer keeps the operator's
@@ -907,6 +909,32 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
                 // follower can refresh the binding on the bound issuer's traffic.
                 csa.note_valid_rx(service_us, be16_read(d + 3));
             }
+            if (const TimeReq* tq = std::get_if<TimeReq>(&dec)) {
+                // §3.16 (Pass 207): stateless responder, addressed requests
+                // only. Same steady clock as the craft's VencFrameMeta.pts;
+                // t3 is stamped at the radio call so TX queueing on this side
+                // stays out of the responder hold.
+                if (tq->prefix.destination != l.cfg.node.originator) return;
+                TimeResp tr;
+                tr.prefix = CommonPrefix{l.cfg.node.originator,
+                                         tq->prefix.originator, session};
+                tr.seq = tq->seq;
+                tr.t1_us = tq->t1_us;
+                tr.t2_us = now_us();
+                uint8_t tf[kTimeRespSize];
+                tr.t3_us = now_us();
+                if (encode_time_resp(tr, tf, sizeof(tf)) == sizeof(tf)) {
+                    const size_t sent = air.value->inject(tf, sizeof(tf));
+                    static bool logged = false;
+                    if (!logged) {
+                        logged = true;
+                        wb_logf("time: answering TIME_REQ from %u (%s)\n",
+                                tq->prefix.originator,
+                                sent ? "sent" : "inject failed");
+                    }
+                }
+                return;
+            }
             if (const DataView* dv = std::get_if<DataView>(&dec)) {
                 // §7.5 uplink data plane: bound-issuer only, monotonic seq,
                 // delivered through the dir:"out" egress. Rejections are
@@ -1212,6 +1240,19 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
         // and the poll timeout, both of which assume nothing is held back.
         (void)sa.flush();
         air.value->heartbeat(l.cfg.node.originator, session, service_now);
+        // §3.16 (Pass 208): 2 Hz broadcast TIME_BEACON so a muted ground keeps
+        // tracking clock drift one-way; t3 is stamped at the radio call.
+        if (service_now >= next_time_beacon_ms) {
+            next_time_beacon_ms = service_now + 500;
+            TimeBeacon tb;
+            tb.prefix = CommonPrefix{l.cfg.node.originator, 0, session};
+            tb.seq = ++time_beacon_seq;
+            uint8_t bf[kTimeBeaconSize];
+            tb.t3_us = now_us();
+            if (encode_time_beacon(tb, bf, sizeof(bf)) == sizeof(bf)) {
+                sa.send_now(bf, sizeof(bf));
+            }
+        }
         {
             const std::optional<uint16_t> latched = csa.latched_issuer();
             air.value->announce(l.cfg.node.originator, session, service_now,

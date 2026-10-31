@@ -876,6 +876,9 @@ Result<Config> load_config_json(const std::string& json_text) {
                     pu.value("pps_budget", cfg.policy.uplink.pps_budget);
                 cfg.policy.uplink.telemetry_hold = pu.value(
                     "telemetry_hold", cfg.policy.uplink.telemetry_hold);
+                // §15.2 (Pass 208) post-sync uplink mute; 0 = never.
+                cfg.policy.uplink.auto_mute_s =
+                    pu.value("auto_mute_s", cfg.policy.uplink.auto_mute_s);
                 if (cfg.policy.uplink.telemetry_hold < 1) {
                     return Result<Config>::fail(
                         "policy.uplink.telemetry_hold: must be >= 1");

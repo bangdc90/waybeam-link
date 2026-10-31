@@ -258,6 +258,89 @@ int main() {
         // registry law; here we only pin that 0x03 now decodes as itself.
     }
 
+    // §3.16 (Pass 207) TIME_REQ / TIME_RESP round-trip (24 / 40 bytes,
+    // addressed; full-range u64 timestamps).
+    for (int i = 0; i < kIters; ++i) {
+        TimeReq q;
+        q.prefix = random_prefix(rng);
+        if (q.prefix.destination == 0) q.prefix.destination = 1;
+        q.seq = rng.u32();
+        q.t1_us = rng.next();
+        size_t n = encode_time_req(q, buf, sizeof(buf));
+        CHECK_EQ_U(n, kTimeReqSize);
+        Decoded d = decode(buf, n);
+        const TimeReq* qv = std::get_if<TimeReq>(&d);
+        CHECK(qv != nullptr);
+        if (qv != nullptr) CHECK(*qv == q);
+
+        TimeResp r;
+        r.prefix = random_prefix(rng);
+        if (r.prefix.destination == 0) r.prefix.destination = 1;
+        r.seq = rng.u32();
+        r.t1_us = rng.next();
+        r.t2_us = rng.next();
+        r.t3_us = rng.next();
+        n = encode_time_resp(r, buf, sizeof(buf));
+        CHECK_EQ_U(n, kTimeRespSize);
+        d = decode(buf, n);
+        const TimeResp* rv = std::get_if<TimeResp>(&d);
+        CHECK(rv != nullptr);
+        if (rv != nullptr) CHECK(*rv == r);
+    }
+    // §3.16 (Pass 207): broadcast refused both ways; wrong length refused.
+    {
+        TimeReq q;
+        q.prefix = random_prefix(rng);
+        q.prefix.destination = 0;
+        CHECK_EQ_U(encode_time_req(q, buf, sizeof(buf)), 0);
+        TimeResp r;
+        r.prefix = random_prefix(rng);
+        r.prefix.destination = 0;
+        CHECK_EQ_U(encode_time_resp(r, buf, sizeof(buf)), 0);
+        r.prefix.destination = 9;
+        const size_t n = encode_time_resp(r, buf, sizeof(buf));
+        CHECK_EQ_U(n, kTimeRespSize);
+        const Decoded short_len = decode(buf, n - 1);
+        const Decoded long_len = decode(buf, n + 1);
+        CHECK(std::get_if<DecodeError>(&short_len) != nullptr);
+        CHECK(std::get_if<DecodeError>(&long_len) != nullptr);
+        buf[5] = 0;  // destination (offset 5..6, §3.1) -> broadcast
+        buf[6] = 0;
+        const Decoded bcast = decode(buf, n);
+        CHECK(std::get_if<TimeResp>(&bcast) == nullptr);
+    }
+    // §3.16 (Pass 208) TIME_BEACON round-trip (24 bytes, broadcast only).
+    for (int i = 0; i < kIters; ++i) {
+        TimeBeacon b;
+        b.prefix = random_prefix(rng);
+        b.prefix.destination = 0;
+        b.seq = rng.u32();
+        b.t3_us = rng.next();
+        const size_t n = encode_time_beacon(b, buf, sizeof(buf));
+        CHECK_EQ_U(n, kTimeBeaconSize);
+        const Decoded d = decode(buf, n);
+        const TimeBeacon* bv = std::get_if<TimeBeacon>(&d);
+        CHECK(bv != nullptr);
+        if (bv != nullptr) CHECK(*bv == b);
+    }
+    // §3.16 (Pass 208): addressed beacon refused both ways; wrong length too.
+    {
+        TimeBeacon b;
+        b.prefix = random_prefix(rng);
+        b.prefix.destination = 7;
+        CHECK_EQ_U(encode_time_beacon(b, buf, sizeof(buf)), 0);
+        b.prefix.destination = 0;
+        const size_t n = encode_time_beacon(b, buf, sizeof(buf));
+        CHECK_EQ_U(n, kTimeBeaconSize);
+        const Decoded short_len = decode(buf, n - 1);
+        const Decoded long_len = decode(buf, n + 1);
+        CHECK(std::get_if<DecodeError>(&short_len) != nullptr);
+        CHECK(std::get_if<DecodeError>(&long_len) != nullptr);
+        buf[6] = 7;  // destination low byte (offset 5..6, §3.1) -> addressed
+        const Decoded addressed = decode(buf, n);
+        CHECK(std::get_if<TimeBeacon>(&addressed) == nullptr);
+    }
+
     // §3.12: reserved flag bits and wrong length are decode errors.
     {
         Announce a;

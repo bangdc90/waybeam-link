@@ -398,6 +398,7 @@ const KeyEntry kKeys[] = {
     {"policy.select.rung_rssi_floor_dbm",         KeyType::kArray},
     {"policy.select.verdict_ttl_s",               KeyType::kNumber},
     {"policy.uplink",                             KeyType::kObject, has_uplink, kWhyNoUplink},
+    {"policy.uplink.auto_mute_s",                 KeyType::kNumber, has_uplink, kWhyNoUplink},
     {"policy.uplink.fallback_ms",                 KeyType::kNumber, has_uplink, kWhyNoUplink},
     {"policy.uplink.pps_budget",                  KeyType::kNumber, has_uplink, kWhyNoUplink},
     {"policy.uplink.telemetry_hold",              KeyType::kNumber, has_uplink, kWhyNoUplink},

@@ -417,6 +417,46 @@ Decoded decode_extended(const uint8_t* buf, size_t len) {
             }
             return v;
         }
+        case ext_type::kTimeReq: {
+            // §3.16 (Pass 207): exact-length, addressed.
+            if (len != kTimeReqSize) {
+                return len < kTimeReqSize ? DecodeError::kTruncated
+                                          : DecodeError::kLengthMismatch;
+            }
+            TimeReq q;
+            q.prefix = decode_prefix(buf);
+            q.seq = be32_read(buf + 12);
+            q.t1_us = be64_read(buf + 16);
+            if (q.prefix.destination == 0) return DecodeError::kInvalidField;
+            return q;
+        }
+        case ext_type::kTimeResp: {
+            if (len != kTimeRespSize) {
+                return len < kTimeRespSize ? DecodeError::kTruncated
+                                           : DecodeError::kLengthMismatch;
+            }
+            TimeResp r;
+            r.prefix = decode_prefix(buf);
+            r.seq = be32_read(buf + 12);
+            r.t1_us = be64_read(buf + 16);
+            r.t2_us = be64_read(buf + 24);
+            r.t3_us = be64_read(buf + 32);
+            if (r.prefix.destination == 0) return DecodeError::kInvalidField;
+            return r;
+        }
+        case ext_type::kTimeBeacon: {
+            // §3.16 (Pass 208): exact-length, broadcast only.
+            if (len != kTimeBeaconSize) {
+                return len < kTimeBeaconSize ? DecodeError::kTruncated
+                                             : DecodeError::kLengthMismatch;
+            }
+            TimeBeacon b;
+            b.prefix = decode_prefix(buf);
+            b.seq = be32_read(buf + 12);
+            b.t3_us = be64_read(buf + 16);
+            if (b.prefix.destination != 0) return DecodeError::kInvalidField;
+            return b;
+        }
         default: {
             // §3.16: an unknown extended type ID is a DECODED value, not an
             // error — additive growth must degrade to "feature unavailable"
@@ -687,6 +727,43 @@ size_t encode_calib_tally(const CalibTally& pkt, uint8_t* out, size_t cap) {
     out[24] = pkt.rx_mcs;
     out[25] = pkt.adapter_fingerprint;
     return kCalibTallySize;
+}
+
+size_t encode_time_req(const TimeReq& pkt, uint8_t* out, size_t cap) {
+    // §3.16 (Pass 207): addressed, never broadcast.
+    if (out == nullptr || cap < kTimeReqSize || pkt.prefix.destination == 0) {
+        return 0;
+    }
+    encode_prefix(pkt.prefix, PacketType::kExtended, out);
+    out[11] = ext_type::kTimeReq;
+    be32_write(out + 12, pkt.seq);
+    be64_write(out + 16, pkt.t1_us);
+    return kTimeReqSize;
+}
+
+size_t encode_time_resp(const TimeResp& pkt, uint8_t* out, size_t cap) {
+    if (out == nullptr || cap < kTimeRespSize || pkt.prefix.destination == 0) {
+        return 0;
+    }
+    encode_prefix(pkt.prefix, PacketType::kExtended, out);
+    out[11] = ext_type::kTimeResp;
+    be32_write(out + 12, pkt.seq);
+    be64_write(out + 16, pkt.t1_us);
+    be64_write(out + 24, pkt.t2_us);
+    be64_write(out + 32, pkt.t3_us);
+    return kTimeRespSize;
+}
+
+size_t encode_time_beacon(const TimeBeacon& pkt, uint8_t* out, size_t cap) {
+    // §3.16 (Pass 208): broadcast, never addressed.
+    if (out == nullptr || cap < kTimeBeaconSize || pkt.prefix.destination != 0) {
+        return 0;
+    }
+    encode_prefix(pkt.prefix, PacketType::kExtended, out);
+    out[11] = ext_type::kTimeBeacon;
+    be32_write(out + 12, pkt.seq);
+    be64_write(out + 16, pkt.t3_us);
+    return kTimeBeaconSize;
 }
 
 size_t encode_link_verdict(const LinkVerdictPkt& pkt, uint8_t* out,

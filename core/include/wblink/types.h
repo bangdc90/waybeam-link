@@ -133,10 +133,16 @@ inline constexpr uint8_t kReservedInvalid = 0x00;
 inline constexpr uint8_t kCalProbe = 0x01;
 inline constexpr uint8_t kCalTally = 0x02;
 inline constexpr uint8_t kLinkVerdict = 0x03;  // §3.16 Pass 159
+inline constexpr uint8_t kTimeReq = 0x04;      // §3.16 Pass 207
+inline constexpr uint8_t kTimeResp = 0x05;     // §3.16 Pass 207
+inline constexpr uint8_t kTimeBeacon = 0x06;   // §3.16 Pass 208
 }  // namespace ext_type
 inline constexpr size_t kCalibProbeFixedSize = 22;
 inline constexpr size_t kCalibTallySize = 26;
 inline constexpr size_t kLinkVerdictSize = 23;  // §3.16 Pass 159, exact-length
+inline constexpr size_t kTimeReqSize = 24;      // §3.16 Pass 207, exact-length
+inline constexpr size_t kTimeRespSize = 40;     // §3.16 Pass 207, exact-length
+inline constexpr size_t kTimeBeaconSize = 24;   // §3.16 Pass 208, exact-length
 // §3.16 (Pass 159) LINK_VERDICT values — the CAUSE, never a vendor scalar.
 // 0/stale = absence of evidence, gates nothing (§9.4 Pass 160). >6 = decode
 // error.

@@ -155,6 +155,31 @@ struct LinkVerdictPkt {
                            const LinkVerdictPkt&) = default;
 };
 
+// §3.16 (Pass 207) TIME_REQ / TIME_RESP — NTP-style four-timestamp exchange
+// in each node's monotonic µs; observability only (§1). Addressed both ways.
+struct TimeReq {
+    CommonPrefix prefix;
+    uint32_t seq = 0;
+    uint64_t t1_us = 0;  // requester clock at the radio call
+    friend bool operator==(const TimeReq&, const TimeReq&) = default;
+};
+struct TimeResp {
+    CommonPrefix prefix;
+    uint32_t seq = 0;    // echo
+    uint64_t t1_us = 0;  // echo
+    uint64_t t2_us = 0;  // responder clock at receipt
+    uint64_t t3_us = 0;  // responder clock at the radio call
+    friend bool operator==(const TimeResp&, const TimeResp&) = default;
+};
+// §3.16 (Pass 208) TIME_BEACON — the craft's clock, broadcast at 2 Hz, so a
+// muted ground keeps tracking drift one-way. Destination is always 0.
+struct TimeBeacon {
+    CommonPrefix prefix;
+    uint32_t seq = 0;
+    uint64_t t3_us = 0;  // sender clock at the radio call
+    friend bool operator==(const TimeBeacon&, const TimeBeacon&) = default;
+};
+
 // §3.16: an 0xF frame whose extended type ID this build does not know.
 // Deliberately a decoded value, not a DecodeError — a newer peer's additive
 // frame must degrade to "feature unavailable" while still counting as valid
@@ -312,7 +337,8 @@ using Decoded = std::variant<DecodeError, DataView, ReservedNack, LinkReport,
                              JsccFeedback, CacheStatus, CacheRequestView,
                              CacheReplyView, Announce, CacheAssign, VehicleCmd,
                              SelectorState, CalibProbe, CalibTally,
-                             LinkVerdictPkt, ExtUnknown>;
+                             LinkVerdictPkt, TimeReq, TimeResp, TimeBeacon,
+                             ExtUnknown>;
 
 // Strict-length decode of one frame (devourer hands us the exact 802.11 MAC
 // payload boundary — trailing bytes are an error, not padding).
@@ -347,6 +373,11 @@ size_t encode_calib_tally(const CalibTally& pkt, uint8_t* out, size_t cap);
 // must be non-zero — enforced by encoder and decoder both).
 size_t encode_link_verdict(const LinkVerdictPkt& pkt, uint8_t* out,
                            size_t cap);
+// §3.16 (Pass 207) TIME_REQ 24 B / TIME_RESP 40 B, addressed (destination
+// must be non-zero — enforced by encoder and decoder both).
+size_t encode_time_req(const TimeReq& pkt, uint8_t* out, size_t cap);
+size_t encode_time_resp(const TimeResp& pkt, uint8_t* out, size_t cap);
+size_t encode_time_beacon(const TimeBeacon& pkt, uint8_t* out, size_t cap);
 size_t encode_announce(const Announce& pkt, uint8_t* out, size_t cap);
 size_t encode_cache_assign(const CacheAssign& pkt, uint8_t* out, size_t cap);
 size_t encode_recovery_request(const RecoveryRequest& pkt, uint8_t* out,

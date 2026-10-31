@@ -133,7 +133,7 @@
     "mode_apply_cmd": "/etc/waybeam-link/modes/apply-mode.sh"
   },
   "stats": {
-    "hz": 1,
+    "hz": 0,
     "stdout": false
   },
   "control": {

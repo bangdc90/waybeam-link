@@ -35,6 +35,7 @@
 #include "wblink/airtime.h"
 #include "wblink/binding.h"
 #include "wblink/cache_assignment.h"
+#include "wblink/clock_sync.h"
 #include "wblink/cache_controller.h"
 #include "wblink/cache_store.h"
 #include "wblink/cache_udp.h"
@@ -1011,6 +1012,24 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
     // flush queue are the shared quiet-gap pacing; keep them verbatim, or a
     // recovery/JSCC return would fire immediately into the craft's TX-deaf
     // window.
+    // §3.16 (Pass 207): link clock-offset estimate against the selected
+    // craft — observability only (§1), read by GET /api/v1/clock.
+    ClockSync clock_sync;
+    uint16_t clock_peer = 0;
+    uint32_t time_req_seq = 0;
+    uint64_t next_time_req_ms = 0;
+    // §3.16 (Pass 208): one fold per beacon, not one per diversity copy.
+    std::optional<uint32_t> last_beacon_seq;
+    // Requests since the last accepted TIME_RESP; at 20 (10 s) say once that
+    // the craft does not hear this uplink — the latency readout needs it.
+    uint32_t time_req_unanswered = 0;
+    bool time_unanswered_logged = false;
+    // §15.2 (Pass 208) policy.uplink.auto_mute_s: armed once at boot on a
+    // node that can transmit; fires once, and any POST /api/v1/uplink
+    // disarms it.
+    bool auto_mute_armed = l.cfg.policy.uplink.auto_mute_s > 0 &&
+                           air.value->iface()->has_tx();
+    uint64_t mute_ready_since_ms = 0;
     const RxCore::Inject inject_return = [&](const uint8_t* f, size_t n,
                                              uint16_t target) {
         if (!qg.enabled() || !ret_tsf_anchored) {
@@ -1764,6 +1783,73 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
         };
         h.scout_results = [&] { return scout.results_json(now_ms()); };
         h.selection_json = build_selection_json;
+        h.clock_json = [&] {  // §15.5 GET /api/v1/clock (Pass 207)
+            const auto e = clock_sync.estimate(now_us());
+            if (!e) {
+                return "{\"valid\":false,\"peer\":" +
+                       std::to_string(clock_peer) + "}";
+            }
+            return "{\"valid\":true,\"peer\":" + std::to_string(clock_peer) +
+                   ",\"offset_us\":" + std::to_string(e->offset_us) +
+                   ",\"delay_us\":" + std::to_string(e->delay_us) +
+                   ",\"samples\":" + std::to_string(e->samples) +
+                   ",\"age_ms\":" +
+                   std::to_string((now_us() - e->newest_t4_us) / 1000) +
+                   ",\"source\":\"" + (e->beacon ? "beacon" : "two-way") +
+                   "\"" +
+                   (clock_sync.d0_us()
+                        ? ",\"d0_us\":" + std::to_string(*clock_sync.d0_us())
+                        : std::string()) +
+                   "}";
+        };
+#if WBLINK_RADIO
+        if (air.value->radio != nullptr) {
+            // §15.5 (Pass 209) per-adapter chip thermal meter (5 s sample).
+            h.thermal_json = [&] {
+                std::string out = "{\"adapters\":[";
+                for (size_t i = 0; i < l.cfg.adapters.size(); ++i) {
+                    const RadioAir::Thermal t = air.value->radio->thermal(i);
+                    const AdapterCfg& a = l.cfg.adapters[i];
+                    if (i) out += ",";
+                    out += "{\"name\":\"" + a.name + "\",\"tx\":" +
+                           (a.role == Role::kTx ? "true" : "false") +
+                           ",\"sampled\":" + (t.sampled ? "true" : "false") +
+                           ",\"valid\":" + (t.valid ? "true" : "false") +
+                           ",\"raw\":" + std::to_string(t.raw) +
+                           ",\"baseline\":" + std::to_string(t.baseline) +
+                           ",\"delta\":" + std::to_string(t.delta) +
+                           ",\"bucket\":\"" + t.bucket + "\"}";
+                }
+                return out + "]}";
+            };
+        }
+#endif
+        if (air.value->iface()->has_tx()) {
+            // §15.5 (Pass 208) ground uplink mute.
+            h.uplink_json = [&] {
+                return std::string("{\"tx_adapter\":true,\"muted\":") +
+                       (air.value->tx_muted ? "true" : "false") +
+                       ",\"auto_mute_s\":" +
+                       std::to_string(l.cfg.policy.uplink.auto_mute_s) +
+                       ",\"auto_armed\":" +
+                       (auto_mute_armed ? "true" : "false") + "}";
+            };
+            h.uplink_set = [&](bool tx) -> std::string {
+                auto_mute_armed = false;
+                air.value->tx_muted = !tx;
+                wb_logf("uplink: %s (POST /api/v1/uplink)\n",
+                        tx ? "unmuted" : "muted");
+                return "";
+            };
+        } else {
+            h.uplink_json = [] {
+                return std::string("{\"tx_adapter\":false,\"muted\":true,"
+                                   "\"auto_mute_s\":0,\"auto_armed\":false}");
+            };
+            h.uplink_set = [](bool) -> std::string {
+                return "no role:\"tx\" adapter on this node";
+            };
+        }
         // Read-only MTU capability/state is available on every RX role,
         // including spectators and controlled caches.
         h.link_mtu_json = [&] {
@@ -2921,6 +3007,36 @@ art.craft_adapter_fingerprint = craft_tally_fp;
                 }
                 return;
             }
+            if (const TimeResp* tr = std::get_if<TimeResp>(&dec)) {
+                // §3.16 (Pass 207): only answers to our own recent requests,
+                // from the craft we are sampling.
+                const uint64_t t4 = now_us();
+                if (tr->prefix.destination == l.cfg.node.originator &&
+                    tr->prefix.originator == clock_peer &&
+                    time_req_seq - tr->seq < 16) {
+                    const bool ok = clock_sync.on_sample(tr->t1_us, tr->t2_us,
+                                                         tr->t3_us, t4);
+                    time_req_unanswered = 0;
+                    static bool logged = false;
+                    if (!logged) {
+                        logged = true;
+                        wb_logf("time: first TIME_RESP from %u %s\n",
+                                tr->prefix.originator,
+                                ok ? "accepted" : "rejected (timestamps)");
+                    }
+                }
+                return;
+            }
+            if (const TimeBeacon* tb = std::get_if<TimeBeacon>(&dec)) {
+                // §3.16 (Pass 208): the sampled craft's broadcast clock.
+                const uint64_t t4 = now_us();
+                if (clock_peer != 0 && tb->prefix.originator == clock_peer &&
+                    last_beacon_seq != tb->seq) {
+                    last_beacon_seq = tb->seq;
+                    clock_sync.on_beacon(tb->t3_us, t4);
+                }
+                return;
+            }
             if (const CalibTally* ct = std::get_if<CalibTally>(&dec)) {
                 // Ground as SENDER: the craft's per-dwell receipt for our
                 // §10.7 uplink run.
@@ -3061,6 +3177,53 @@ art.craft_adapter_fingerprint = craft_tally_fp;
         }
         rx.tick(now, deliver, inject_report, inject_return, lv,
                 &inject_verdict);
+        // §3.16 (Pass 207): 2 Hz TIME_REQ to the selected craft on the
+        // immediate return inject; t1 is stamped at the radio call.
+        if (active_selection.originator != 0 && now >= next_time_req_ms) {
+            next_time_req_ms = now + 500;
+            if (clock_peer != active_selection.originator) {
+                clock_peer = active_selection.originator;
+                clock_sync.reset();
+            }
+            TimeReq tq;
+            tq.prefix = CommonPrefix{l.cfg.node.originator, clock_peer,
+                                     session};
+            tq.seq = ++time_req_seq;
+            tq.t1_us = now_us();
+            uint8_t tf[kTimeReqSize];
+            if (encode_time_req(tq, tf, sizeof(tf)) == sizeof(tf) &&
+                air.value->inject_return(clock_peer, tf, sizeof(tf), false) > 0 &&
+                ++time_req_unanswered == 20 && !time_unanswered_logged &&
+                !clock_sync.d0_us()) {
+                time_unanswered_logged = true;
+                wb_logf("time: 20 TIME_REQ to %u sent, no TIME_RESP — the "
+                        "craft does not hear this uplink adapter; latency "
+                        "stays unavailable\n",
+                        clock_peer);
+            }
+        }
+        // §15.2 (Pass 208): mute the uplink once the latched stream and a
+        // calibrated clock (fresh two-way + TIME_BEACON d0) held auto_mute_s.
+        if (auto_mute_armed) {
+            const auto ce = clock_sync.estimate(now_us());
+            const bool ready = active_selection.originator != 0 &&
+                               clock_sync.d0_us().has_value() && ce &&
+                               !ce->beacon;
+            if (!ready) {
+                mute_ready_since_ms = 0;
+            } else if (mute_ready_since_ms == 0) {
+                mute_ready_since_ms = now;
+            } else if (now - mute_ready_since_ms >=
+                       uint64_t{l.cfg.policy.uplink.auto_mute_s} * 1000u) {
+                air.value->tx_muted = true;
+                auto_mute_armed = false;
+                wb_logf("uplink: muted (auto: originator %u latched, clock "
+                        "calibrated d0=%lld us, %u s)\n",
+                        active_selection.originator,
+                        static_cast<long long>(*clock_sync.d0_us()),
+                        l.cfg.policy.uplink.auto_mute_s);
+            }
+        }
         air.value->heartbeat(l.cfg.node.originator, session, now);
         // §6.3a: drop reassembler blocks past their deadline (unrecoverable),
         // so a stalled block never wedges frame-shm egress.

@@ -1,0 +1,53 @@
+{
+  "_comment": "Ubuntu ground receiver for craft originator 17. Two RTL8812AU adapters pinned by USB path; run from the waybeam-link repository root.",
+  "node": {
+    "originator": 9,
+    "role": "rx",
+    "preferred_originator": 17,
+    "net_id": 0
+  },
+  "profile_table": "profiles/table.example.json",
+  "adapters": [
+    {
+      "name": "au-uplink",
+      "bus": "1-3.1",
+      "role": "tx",
+      "channel": 5805,
+      "bw": 20
+    },
+    {
+      "name": "au-diversity",
+      "bus": "1-3.3",
+      "role": "rx",
+      "channel": 5805,
+      "bw": 20
+    }
+  ],
+  "streams": [
+    {
+      "stream_id": 0,
+      "stream_type": "RTP",
+      "dir": "out",
+      "bind": {
+        "kind": "frame-shm",
+        "name": "wblink_ground"
+      }
+    }
+  ],
+  "air": {
+    "kind": "radio"
+  },
+  "policy": {
+    "return": {
+      "quiet_gap": true,
+      "guard_us": 300,
+      "return_window_us": 2000
+    }
+  },
+  "stats": {
+    "hz": 1
+  },
+  "control": {
+    "bind": "127.0.0.1:8091"
+  }
+}

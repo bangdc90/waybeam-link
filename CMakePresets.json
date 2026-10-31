@@ -110,6 +110,19 @@
       }
     },
     {
+      "name": "hi3536dv100-au",
+      "displayName": "Hi3536DV100 vehicle cross (RTL8812AU only)",
+      "binaryDir": "${sourceDir}/build/hi3536dv100-au",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-hi3536dv100.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-include ${sourceDir}/cmake/glibc-2.36-compat.h",
+        "WBLINK_WERROR": "ON",
+        "WBLINK_DEVOURER_CHIPS": "au",
+        "DEVOURER_LOG_MAX_LEVEL": "WARN"
+      }
+    },
+    {
       "name": "android-arm64",
       "displayName": "Android arm64 / bionic (compile-only verify; radio ON, control server ON and -Werror are load-bearing, see CLAUDE.md)",
       "binaryDir": "${sourceDir}/build/android-arm64",
@@ -138,6 +151,7 @@
     { "name": "ssc378qe-au", "configurePreset": "ssc378qe-au" },
     { "name": "cv610", "configurePreset": "cv610" },
     { "name": "gk7205v200-au", "configurePreset": "gk7205v200-au" },
+    { "name": "hi3536dv100-au", "configurePreset": "hi3536dv100-au" },
     { "name": "android-arm64", "configurePreset": "android-arm64" }
   ],
   "testPresets": [

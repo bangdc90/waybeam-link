@@ -317,6 +317,7 @@ struct RadioAir::Impl {
         Adapter& operator=(const Adapter&) = delete;
         // RX-thread-owned counters (relaxed atomics; read from stats).
         std::atomic<uint64_t> rx_frames{0};
+        std::atomic<uint64_t> rx_trace_packets{0};
         std::atomic<uint64_t> rx_filtered{0};
         std::atomic<uint64_t> rx_dropped{0};
         std::atomic<int8_t> rssi_last{-128};
@@ -415,6 +416,14 @@ struct RadioAir::Impl {
     // Pass 8). Written from RX threads via the shared FILE* (stdio-locked);
     // counters are relaxed atomics.
     FILE* ev_stream = nullptr;
+    bool trace_usb_rx = false;
+    // Bench-only WBLINK_THERMAL_LOG_S=<s>: log each adapter's RF 0x42 thermal
+    // meter every <s> seconds from poll_once. Read-only; 0 = off.
+    uint64_t thermal_log_ms = 0;
+    uint64_t thermal_next_ms = 0;
+    // §15.5 (Pass 209): last sample per adapter, refreshed every 5 s.
+    uint64_t thermal_sample_next_ms = 0;
+    std::vector<RadioAir::Thermal> thermal;
     std::atomic<uint64_t> tx_reports{0};
     std::atomic<uint64_t> tx_report_fails{0};
 
@@ -449,7 +458,10 @@ struct RadioAir::Impl {
                 im->tx_report_fails.fetch_add(1, std::memory_order_relaxed);
             }
         }
-        return static_cast<ssize_t>(n);  // always consume (drop non-reports)
+        if (im->trace_usb_rx && ev_contains(buf, n, "\"rx.ring\"", 9)) {
+            wb_logf("%.*s", static_cast<int>(n), buf);
+        }
+        return static_cast<ssize_t>(n);
     }
     // Human-diagnostics sink: forward everything except the per-packet
     // success line (see diag_stream). Same EveryLine contract as ev_write —
@@ -691,6 +703,14 @@ struct RadioAir::Impl {
     // RX-loop callback: §3.0 filter on the RX thread, accepted frames cross
     // into the caller's world through the bounded queue.
     void on_packet(Adapter& a, uint8_t adapter_id, const Packet& p) {
+        if (trace_usb_rx && a.rx_trace_packets.fetch_add(1, std::memory_order_relaxed) < 8) {
+            wb_logf("radio: rxraw %s type=%u crc=%u icv=%u len=%zu bytes=%02x:%02x\n",
+                    a.name.c_str(), static_cast<unsigned>(p.RxAtrib.pkt_rpt_type),
+                    static_cast<unsigned>(p.RxAtrib.crc_err),
+                    static_cast<unsigned>(p.RxAtrib.icv_err), p.Data.size(),
+                    p.Data.empty() ? 0u : static_cast<unsigned>(p.Data[0]),
+                    p.Data.size() < 2 ? 0u : static_cast<unsigned>(p.Data[1]));
+        }
         if (p.RxAtrib.pkt_rpt_type != RX_PACKET_TYPE::NORMAL_RX ||
             p.RxAtrib.crc_err || p.RxAtrib.icv_err) {
             // §9.4 Pass 163 guard 3: surface the descriptor rate of corrupt
@@ -713,6 +733,15 @@ struct RadioAir::Impl {
         if (!d || d->originator == cfg.originator) {  // not ours / our own TX
             a.rx_filtered.fetch_add(1, std::memory_order_relaxed);
             return;
+        }
+        if (trace_usb_rx && a.rx_frames.load(std::memory_order_relaxed) < 8) {
+            wb_logf("radio: rxwire %s sender=%u net=%u body=%zu header=%02x:%02x:%02x:%02x\n",
+                    a.name.c_str(), static_cast<unsigned>(d->originator),
+                    static_cast<unsigned>(d->net_id), d->payload_len,
+                    static_cast<unsigned>(d->payload[0]),
+                    static_cast<unsigned>(d->payload[1]),
+                    d->payload_len > 2 ? static_cast<unsigned>(d->payload[2]) : 0u,
+                    d->payload_len > 3 ? static_cast<unsigned>(d->payload[3]) : 0u);
         }
         // Bench-only synthetic RX loss, independent per adapter: a dropped
         // frame vanishes exactly like real air loss (before every counter).
@@ -1024,6 +1053,11 @@ Result<RadioAir> RadioAir::create(RadioAirCfg cfg) {
                                       std::strerror(errno));
     }
     im.cfg = cfg;
+    im.trace_usb_rx = std::getenv("WBLINK_USB_RX_TRACE") != nullptr;
+    if (const char* s = std::getenv("WBLINK_THERMAL_LOG_S")) {
+        const long sec = std::strtol(s, nullptr, 10);
+        im.thermal_log_ms = sec > 0 ? static_cast<uint64_t>(sec) * 1000 : 0;
+    }
     im.rx_drop_permille.store(cfg.rx_drop_permille,
                               std::memory_order_relaxed);
     im.usb_tx_agg = cfg.usb_tx_agg;
@@ -1326,6 +1360,12 @@ Result<RadioAir> RadioAir::create(RadioAirCfg cfg) {
         // StartRxLoop works on the same claimed handle (gate-1 pattern);
         // ignored on Jaguar1.
         dc.rx.enable_with_tx = true;
+        if (im.trace_usb_rx) {
+            dc.rx.ring_ms = 1000;
+        }
+    #if defined(WBLINK_USB_RX_HEAP_DEFAULT)
+        dc.usb.rx_zerocopy = false;
+    #endif
         // Per-frame TX-status CCX reports on the injecting adapter only
         // (Pass 8: TX-wedge detector; SPE_RPT is per-descriptor, so RX-only
         // adapters keep byte-identical bring-up). With a §15.2 mac pin the
@@ -1760,6 +1800,10 @@ Result<RadioAir> RadioAir::create(RadioAirCfg cfg) {
     // any reader can call the shared drain.
     im.quality_cache.resize(im.adapters.size());
 
+    // Keep bring-up diagnostics above, but skip devourer formatting and I/O
+    // once the packet-path workers start.
+    im.logger->set_level(Logger::Level::Silent);
+
     for (size_t i = 0; i < im.adapters.size(); ++i) {
         Impl::Adapter& ad = *im.adapters[i];
         // The declared adapter set (§15.5 /info mirrors this): name, port,
@@ -2005,6 +2049,38 @@ int RadioAir::poll_once(int timeout_ms, const RxCb& cb) {
     std::deque<RxFrame> local;
     uint64_t ready = 0;
     while (::read(im.ready_fd, &ready, sizeof(ready)) > 0) {}
+    {
+        // §15.5 (Pass 209): always sample (5 s) for GET /api/v1/thermal;
+        // WBLINK_THERMAL_LOG_S additionally logs.
+        const uint64_t now = steady_ms();
+        const bool sample = now >= im.thermal_sample_next_ms;
+        const bool log = im.thermal_log_ms != 0 && now >= im.thermal_next_ms;
+        if (sample) im.thermal_sample_next_ms = now + 5000;
+        if (log) im.thermal_next_ms = now + im.thermal_log_ms;
+        if (im.thermal.size() != im.adapters.size()) im.thermal.resize(im.adapters.size());
+        for (size_t i = 0; (sample || log) && i < im.adapters.size(); ++i) {
+            const auto& ap = im.adapters[i];
+            if (!ap->dev) {
+                continue;
+            }
+            const devourer::ThermalStatus t = ap->dev->GetThermalStatus();
+            Thermal& th = im.thermal[i];
+            th.sampled = true;
+            th.valid = t.valid;
+            th.raw = t.raw;
+            th.baseline = t.baseline;
+            th.delta = t.delta;
+            th.bucket = devourer::ThermalBucket(t);
+            if (log) {
+                wb_logf("thermal: adapter \"%s\" raw=%u baseline=%u delta=%d "
+                        "%s power_qdb=%d\n",
+                        ap->name.c_str(), static_cast<unsigned>(t.raw),
+                        static_cast<unsigned>(t.baseline), t.delta,
+                        devourer::ThermalBucket(t),
+                        ap->tx ? static_cast<int>(ap->power_applied_qdb) : 0);
+            }
+        }
+    }
     {
         std::unique_lock<std::mutex> lk(im.mu);
         if (im.queue.empty() && timeout_ms > 0) {
@@ -2472,6 +2548,12 @@ void RadioAir::tx_report_counters(uint64_t& submitted,
     }
     submitted = impl_->adapters[impl_->tx_idx]->tx_submitted;
     reports = impl_->tx_reports.load(std::memory_order_relaxed);
+}
+
+RadioAir::Thermal RadioAir::thermal(size_t adapter) const {
+    // §15.5 (Pass 209): the poll path's last 5 s sample; unsampled = default.
+    if (adapter >= impl_->thermal.size()) return {};
+    return impl_->thermal[adapter];
 }
 
 RadioAir::AdapterCounters RadioAir::counters(size_t adapter) const {

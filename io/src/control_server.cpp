@@ -318,6 +318,30 @@ void ControlServer::dispatch(Conn& c, const std::string& method,
             }
             return reply(200, "OK", h_.profile_json());
         }
+        if (path == "/api/v1/clock") {  // §15.5 Pass 207
+            if (!h_.clock_json) {
+                return reply(409, "Conflict",
+                             json_err("clock sync not available in this "
+                                      "mode"));
+            }
+            return reply(200, "OK", h_.clock_json());
+        }
+        if (path == "/api/v1/thermal") {  // §15.5 Pass 209
+            if (!h_.thermal_json) {
+                return reply(409, "Conflict",
+                             json_err("thermal meter not available in this "
+                                      "mode"));
+            }
+            return reply(200, "OK", h_.thermal_json());
+        }
+        if (path == "/api/v1/uplink") {  // §15.5 Pass 208
+            if (!h_.uplink_json) {
+                return reply(409, "Conflict",
+                             json_err("uplink control not available in this "
+                                      "mode"));
+            }
+            return reply(200, "OK", h_.uplink_json());
+        }
         if (path == "/api/v1/bench/rx-drop") {
             if (!h_.bench_rx_drop_json) {
                 return reply(409, "Conflict",
@@ -663,6 +687,16 @@ void ControlServer::dispatch(Conn& c, const std::string& method,
     if (path == "/api/v1/video/recover") {
         if (!h_.video_recover) return na();
         return done(h_.video_recover(j.value("stream_id", -1)));
+    }
+    if (path == "/api/v1/uplink") {  // §15.5 Pass 208
+        if (!h_.uplink_set) return na();
+        // Required and typed, like ack_responder: this one keys a radio.
+        if (!j.contains("tx") || !j["tx"].is_boolean()) {
+            return reply(400, "Bad Request", json_err("tx boolean required"));
+        }
+        const std::string err = h_.uplink_set(j["tx"].get<bool>());
+        return err.empty() ? reply(200, "OK", json_ok())
+                           : reply(409, "Conflict", json_err(err));
     }
     if (path == "/api/v1/air/ack_responder") {  // §3.0/§15.5 Pass 198
         if (!h_.ack_responder_set) return na();

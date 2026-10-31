@@ -379,6 +379,18 @@ class RadioAir : public AirIface {
         bool rx_dead = false;  // §15.3 Pass 101: RX thread exited (definitive)
     };
     AdapterCounters counters(size_t adapter) const;
+    // §15.5 (Pass 209) chip thermal meter, sampled every 5 s on the poll
+    // path (RF 0x42; Realtek units ~1.5-2 C each, NOT degrees). `delta` =
+    // raw − EFUSE baseline; `bucket` cool/warm/hot/critical/unknown.
+    struct Thermal {
+        bool sampled = false;
+        bool valid = false;  // an EFUSE baseline exists, so delta means heat
+        unsigned raw = 0;
+        unsigned baseline = 0;
+        int delta = 0;
+        const char* bucket = "unknown";
+    };
+    Thermal thermal(size_t adapter) const;
     uint64_t rx_frames(size_t adapter) const override {
         return counters(adapter).rx_frames;
     }

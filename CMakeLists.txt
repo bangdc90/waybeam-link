@@ -143,6 +143,10 @@ if(WBLINK_RADIO)
     # the migration cannot be staged.
     add_subdirectory(third_party/libusb-cmake
                      ${CMAKE_CURRENT_BINARY_DIR}/libusb EXCLUDE_FROM_ALL)
+    if(DEFINED WBLINK_HI3536DV100_TOOLCHAIN)
+        target_compile_options(usb-1.0 PRIVATE
+            -include ${CMAKE_CURRENT_SOURCE_DIR}/cmake/glibc-2.36-compat.h)
+    endif()
 
     # Likewise scoped. As a FORCE cache entry this redirected the ENTIRE
     # consuming project's pkg-config to a shim that answers libusb-1.0 and
@@ -410,6 +414,12 @@ target_link_libraries(wblink_io PUBLIC wblink_core)
 if(WBLINK_RADIO)
     target_sources(wblink_io PRIVATE io/src/air_radio.cpp)
     target_compile_definitions(wblink_io PUBLIC WBLINK_RADIO=1)
+    # Heap-backed USB RX: on these HiSilicon/Goke xHCI hosts zero-copy bulk
+    # transfers complete but the descriptor parser sees no packets (Hi3536
+    # A/B 2026-10-29; GK7205 camera RX dead the same way 2026-10-31).
+    if(DEFINED WBLINK_HI3536DV100_TOOLCHAIN OR DEFINED WBLINK_GK7205V200_TOOLCHAIN)
+        target_compile_definitions(wblink_io PRIVATE WBLINK_USB_RX_HEAP_DEFAULT=1)
+    endif()
     target_include_directories(wblink_io SYSTEM PRIVATE
         third_party/devourer/src
         third_party/libusb-cmake/libusb/libusb)
@@ -522,6 +532,9 @@ endif()
 
 if(WBLINK_BUILD_APP)
     add_executable(waybeam-link app/main.cpp)
+    if(DEFINED WBLINK_HI3536DV100_TOOLCHAIN)
+        target_sources(waybeam-link PRIVATE cmake/glibc-2.36-compat.cpp)
+    endif()
     target_compile_options(waybeam-link PRIVATE ${WBLINK_WARNINGS})
     target_link_libraries(waybeam-link PRIVATE wblink_io wblink_node)
 endif()

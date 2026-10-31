@@ -311,6 +311,9 @@ struct UplinkPolicy {
     uint32_t fallback_ms = 50;     // no anchored window -> §7.1 opportunistic
     uint32_t pps_budget = 100;     // per-stream ingress rate cap
     uint32_t telemetry_hold = 32;  // TELEMETRY FIFO cap (CONTROL is always 1)
+    // §15.2 (Pass 208): mute the uplink once a latched stream and a
+    // calibrated §3.16 clock have held this many seconds. 0 = never.
+    uint32_t auto_mute_s = 0;
 };
 
 struct CsaPolicy {

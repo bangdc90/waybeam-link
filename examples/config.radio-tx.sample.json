@@ -67,6 +67,7 @@
     "enabled": true
   },
   "stats": {
-    "hz": 1
+    "hz": 0,
+    "stdout": false
   }
 }

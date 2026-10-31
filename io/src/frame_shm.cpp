@@ -289,11 +289,8 @@ void FrameShmRing::reader_loop() {
     uint8_t* b = map_;
     uint32_t* seq_addr = reinterpret_cast<uint32_t*>(b + kFrHdrFutexSeq);
     while (!stop_.load(std::memory_order_acquire)) {
-        // Readiness is a level, not an edge: whenever the ring holds an
-        // undrained frame, nudge the main loop. This is robust to the
-        // start-up race where the producer bumps futex_seq before this thread
-        // ever parks — we detect the pending frame directly instead of relying
-        // on catching that one wake.
+        atomic_store_u32(b, kFrHdrConsumerWaiting, 1, __ATOMIC_SEQ_CST);
+        const uint32_t seq = atomic_load_u32(b, kFrHdrFutexSeq, __ATOMIC_SEQ_CST);
         const uint64_t wr = atomic_load_u64(b, kFrHdrWriteIdx, __ATOMIC_ACQUIRE);
         const uint64_t rd = atomic_load_u64(b, kFrHdrReadIdx, __ATOMIC_ACQUIRE);
         if (wr != rd) {
@@ -301,14 +298,6 @@ void FrameShmRing::reader_loop() {
             const ssize_t n = ::write(event_fd_, &one, sizeof(one));
             (void)n;  // eventfd add of 1 never blocks/short-writes here
         }
-        // Park until the producer seq-bumps (low-latency wake) or the 100 ms
-        // tick fires (re-check pending / stop_). Publish "waiting" BEFORE
-        // loading the seq we sleep on: the producer seq-bumps then reads
-        // consumer_waiting, and the seq_cst ordering makes the race decidable —
-        // either it sees waiting=1 and wakes us, or FUTEX_WAIT sees the moved
-        // seq and returns immediately.
-        atomic_store_u32(b, kFrHdrConsumerWaiting, 1, __ATOMIC_SEQ_CST);
-        const uint32_t seq = atomic_load_u32(b, kFrHdrFutexSeq, __ATOMIC_SEQ_CST);
         futex_wait(seq_addr, seq, kReaderTimeoutNs);
         atomic_store_u32(b, kFrHdrConsumerWaiting, 0, __ATOMIC_SEQ_CST);
     }

@@ -204,6 +204,10 @@ struct AirBackend {
 #endif
     uint64_t last_tx_ms = 0;
     uint64_t last_announce_ms = 0;  // §3.12 ANNOUNCE cadence (own timer)
+    // §15.2 (Pass 208) policy.uplink.auto_mute_s / POST /api/v1/uplink: the
+    // TX adapter stays up but nothing airs — every inject below reports
+    // not-sent (the no-tx-adapter answer) and no heartbeat is emitted.
+    bool tx_muted = false;
     // §15.5 (Pass 198): the BOOT air.ack_responder, kept so the endpoint can
     // report `configured` beside the live `armed` — the toggle is volatile,
     // and an operator needs to see what a restart would go back to.
@@ -385,6 +389,7 @@ struct AirBackend {
     }
 
     size_t inject(const uint8_t* f, size_t n) {
+        if (tx_muted) return 0;
         const size_t sent = iface()->inject(f, n);
         if (sent > 0) {
             last_tx_ms = now_ms();
@@ -398,6 +403,7 @@ struct AirBackend {
     // decided to air, and holding the stamp back for at most two more frames
     // would make batching look like a TX stall.
     size_t inject_staged(const uint8_t* f, size_t n) {
+        if (tx_muted) return 0;
         const size_t sent = iface()->inject_staged(f, n);
         if (sent > 0) {
             last_tx_ms = now_ms();
@@ -407,6 +413,7 @@ struct AirBackend {
     size_t flush_staged() { return iface()->flush_staged(); }
 
     size_t inject_resend(const uint8_t* f, size_t n) {
+        if (tx_muted) return 0;
         const size_t sent = iface()->inject_resend(f, n);
         if (sent > 0) last_tx_ms = now_ms();
         return sent;
@@ -425,6 +432,7 @@ struct AirBackend {
     // addressing and ignores the target.
     size_t inject_return(uint16_t target, const uint8_t* f, size_t n,
                          bool urgent = false) {
+        if (tx_muted) return 0;
         const size_t sent = iface()->inject_return(target, f, n, urgent);
         if (sent > 0) {
             last_tx_ms = now_ms();
@@ -437,7 +445,7 @@ struct AirBackend {
         // one backend divergence that was NOT documented anywhere — it read as
         // a monitor detail rather than a rule. It is a rule: a node with no TX
         // adapter does not emit §3.11 heartbeats, whichever backend it runs.
-        if (!iface()->has_tx()) return;
+        if (!iface()->has_tx() || tx_muted) return;
         if (now < last_tx_ms || now - last_tx_ms < 1000) {
             return;
         }

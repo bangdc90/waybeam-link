@@ -69,6 +69,39 @@ int main() {
     FrameReassemblerConfig rc;
     rc.deadline_ms = 50;
 
+    {
+        auto config = framer_cfg(FecScheme::kNone, 0, 0);
+        FrameFramer framer(config);
+        const auto blob = make_frame(72 * 1024, true, 55);
+        const auto symbols = produce(framer, blob);
+        CHECK(!symbols.empty());
+        CHECK(symbols.size() * 2 > 80);
+        for (const uint32_t deadline : {25u, 150u}) {
+            FrameReassemblerConfig recovery;
+            recovery.deadline_ms = deadline;
+            FrameReassembler reassembler(recovery);
+            std::vector<uint8_t> delivered;
+            const auto emit = [&](const uint8_t* data, size_t size) {
+                delivered.assign(data, data + size);
+                return true;
+            };
+            uint64_t now = 1000;
+            for (const auto& symbol : symbols) {
+                reassembler.tick(now, emit);
+                reassembler.push(symbol.block_id, symbol.flags,
+                                 symbol.payload.data(), symbol.payload.size(), now, emit);
+                now += 2;
+            }
+            if (deadline == 25) {
+                CHECK(delivered.empty());
+                CHECK_EQ_U(reassembler.stats().frames_deadline, 1);
+            } else {
+                CHECK(delivered == blob);
+                CHECK_EQ_U(reassembler.stats().frames_deadline, 0);
+            }
+        }
+    }
+
     // --- FEC on, no loss: fast path (all sources present) -------------------
     {
         FrameFramer ff(framer_cfg(FecScheme::kRlc256, 250, 100));

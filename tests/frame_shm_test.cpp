@@ -410,22 +410,20 @@ int main() {
             FrameShmRing& c = **cons.value;
             c.drain_event();  // clear any startup edge
 
-            auto f = pattern(777, 9);
-            CHECK(p.write_frame(f.data(), f.size()));
-
-            pollfd pfd{c.event_fd(), POLLIN, 0};
-            bool readable = false;
-            for (int tries = 0; tries < 20 && !readable; ++tries) {
-                const int rc = ::poll(&pfd, 1, 200);  // 200 ms slices, same-proc
-                readable = (rc > 0) && (pfd.revents & POLLIN) != 0;
+            for (unsigned round = 0; round < 1024; ++round) {
+                c.drain_event();
+                const auto f = pattern(777, static_cast<uint8_t>(round));
+                CHECK(p.write_frame(f.data(), f.size()));
+                pollfd pfd{c.event_fd(), POLLIN, 0};
+                const int rc = ::poll(&pfd, 1, 50);
+                CHECK(rc > 0 && (pfd.revents & POLLIN) != 0);
+                c.drain_event();
+                std::vector<uint8_t> buf(slot_size);
+                const long got = c.read_frame(buf.data(), buf.size());
+                CHECK_EQ_U(static_cast<unsigned long long>(got), f.size());
+                CHECK(got >= 0 && std::memcmp(buf.data(), f.data(), f.size()) == 0);
+                if (rc <= 0) break;
             }
-            CHECK(readable);
-            c.drain_event();
-
-            std::vector<uint8_t> buf(slot_size);
-            const long got = c.read_frame(buf.data(), buf.size());
-            CHECK_EQ_U(static_cast<unsigned long long>(got), f.size());
-            CHECK(got >= 0 && std::memcmp(buf.data(), f.data(), f.size()) == 0);
         }
     }
     // Rings out of scope here: destructors join the reader thread + unlink.

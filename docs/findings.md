@@ -12,6 +12,47 @@ has closed, with a pointer to the Pass.
 
 ---
 
+## 2026-10-29 - Hi3536 USB RX zero-copy incompatibility
+
+Ground `.233`, RTL8812AU pair, 5805 MHz/20 MHz: bulk-IN completions and eight
+re-armed URBs per adapter, but zero application packet callbacks with zero-copy
+buffers. Switching only to existing heap buffers restored 44/26 accepted
+packets and 13 firmware TX reports in a bounded capture. The Hi3536-default
+repeat received sender-17/net-0 ANNOUNCE beacons (46/30 accepted, 15 reports).
+No video DATA was observed; do not call this an HDMI playback result.
+
+The Hi3536 build now disables zero-copy RX in application-owned configuration;
+all other platform defaults remain unchanged. `WBLINK_USB_RX_TRACE=1` enables
+bounded existing URB/packet diagnostics. Exact DMA/cache mechanics remain a
+hypothesis. Full evidence: `../memory-bank/evidence/hi3536-usb-rx-zerocopy.md`.
+
+## 2026-10-29 - Hi3536/GK7205 paired MCS0 keyframe recovery
+
+Previously captured GK7205 IDRs were 65-72 KB, requiring about 80-89 ms of
+payload airtime at MCS0 before overhead. The paired floor table selects a
+uniform `min(80, 25) = 25 ms` deadline. A paced 72 KiB regression now confirms
+expiry at 25 ms and byte-exact completion at 150 ms over roughly 100 ms.
+
+The paired table `hi3536dv100-ground/config/table-mcs0-recovery.json` uses one
+fixed MCS0 rung, no FEC/probing, uniform 150 ms, table version `0x60`, and SHA256
+`0833e1f22106cb49d4670eea723ff1e26f960d7da6fd3a8910e39b2b72d4b03f`. It is
+configuration, not a protocol amendment or a low-latency qualification.
+
+Hardware rollout on ground `.233` and GK7205 `.247` used matching table bytes
+at both ends while retaining 1280x720/55 fps/2800 kbps. The camera published
+about 55.6 fps with no ongoing VFRM full/oversize drops. A ground sample counted
+1,311 ring frames, largest frame about 56.3 KB, and 3 unrecoverable frames (2
+superseded, 1 deadline). The operator subsequently confirmed video output
+after the decoder recovery-gate update. This is evidence that the large-keyframe
+recovery path works at this operating point; sustained RF recovery and
+glass-to-glass latency qualification remain open.
+
+Both `deploy-gk7205.sh` and `hi3536dv100-ground/deploy-hi3536-ground.sh` now
+default to this shared table and verify its pinned hash. `--table-only` deploys
+the table without replacing binaries; the camera script requires `--start` to
+change a live table, and the ground script refuses a live table change. Full
+pipeline evidence: `../memory-bank/evidence/hi3536-ground-pipeline-fixes.md`.
+
 ## 2026-09-13 — ARQ's marginal value on a GDR craft, and the decision to remove it
 
 **Setup.** Craft `.232` (SSC338Q, single 8812EU) at **100 fps** running a
