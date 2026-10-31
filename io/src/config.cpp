@@ -918,6 +918,7 @@ Result<Config> load_config_json(const std::string& json_text) {
                     pc.value("bind_release_s", csa.bind_release_s);
                 csa.persist_channel =
                     pc.value("persist_channel", csa.persist_channel);
+                csa.persist_file = pc.value("persist_file", csa.persist_file);
                 {
                     const int64_t hc =
                         pc.value("home_chan", int64_t{csa.home_chan});

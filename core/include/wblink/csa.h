@@ -119,6 +119,9 @@ class CsaFollower {
     bool campaign_active() const {
         return state_ == State::kArmed || state_ == State::kVerify;
     }
+    // §11.5 COMMITTED: the switch is confirmed on target (§15.2 Pass 210
+    // persists the channel on this edge).
+    bool committed() const { return state_ == State::kCommitted; }
     uint64_t freeze_until_us() const { return freeze_until_us_; }  // §11.3
     // The issuer this follower latched onto (established by a MAC-valid CSA).
     std::optional<uint16_t> latched_issuer() const { return latched_; }

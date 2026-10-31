@@ -55,6 +55,7 @@ add_wb_test(adapter_elect_test wblink_io)
 add_wb_test(ldpc_deaf_test wblink_io wblink_node)
 
 add_wb_test(calib_store_test wblink_io)
+add_wb_test(channel_persist_test wblink_io)
 add_wb_test(txwedge_test wblink_io)
 add_wb_test(dot11_test wblink_io)
 add_wb_test(radio_decode_test wblink_io)

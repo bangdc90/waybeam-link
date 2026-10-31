@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "wblink/air_udp.h"
+#include "wblink/channel_persist.h"
 #include "wblink/airtime.h"
 #include "wblink/binding.h"
 #include "wblink/cache_assignment.h"
@@ -107,6 +108,7 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
 
 int run_rx(Loaded& l, const std::atomic<int>& stop,
            const FrameSink& frame_out, RxRuntimeControl* runtime_control) {
+    apply_persisted_channel(l.cfg);  // §15.2 Pass 210, before bring-up
     auto air = AirBackend::create(l.cfg);
     if (!air) {
         wb_logf("air error: %s\n", air.error.c_str());
@@ -2440,6 +2442,7 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                 scout.set_rest_filter(active_selection.net_id);
                 wb_logf("move: detach + local retune -> %u MHz, spectating "
                         "(Pass 206)\n", chan);
+                record_channel(l.cfg, chan);  // §15.2 Pass 210
                 return {200, "{\"ok\":true}"};
             };
         }
@@ -3539,6 +3542,7 @@ art.craft_adapter_fingerprint = craft_tally_fp;
                 }
                 wb_logf("csa: campaign confirmed -> %u MHz\n",
                         operating_chan);
+                record_channel(l.cfg, operating_chan);  // §15.2 Pass 210
                 break;
             }
             case CsaIssuer::IssuerAction::Kind::kRevert:

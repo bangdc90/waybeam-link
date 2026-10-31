@@ -340,6 +340,7 @@ const KeyEntry kKeys[] = {
     {"policy.csa.home_chan",                      KeyType::kNumber, home_chan_is_read, kWhyHomeChanUnread},
     {"policy.csa.min_interval_s",                 KeyType::kNumber},
     {"policy.csa.persist_channel",                KeyType::kBool},
+    {"policy.csa.persist_file",                   KeyType::kString},
     {"policy.csa.psk",                            KeyType::kString},
     {"policy.csa.rx_liveness_ms",                 KeyType::kNumber},
     {"policy.csa.settle_s",                       KeyType::kNumber},

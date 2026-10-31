@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "wblink/air_udp.h"
+#include "wblink/channel_persist.h"
 #include "wblink/airtime.h"
 #include "wblink/binding.h"
 #include "wblink/cache_assignment.h"
@@ -112,6 +113,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
 
 int run_tx(Loaded& l, const std::atomic<int>& stop,
            const ModeApplyFn& mode_apply, TxRuntimeInfo* runtime_info) {
+    apply_persisted_channel(l.cfg);  // §15.2 Pass 210, before bring-up
     auto air = AirBackend::create(l.cfg);
     if (!air) {
         wb_logf("air error: %s\n", air.error.c_str());
@@ -801,6 +803,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
             cur_chan = chan;
             wb_logf("channel: local retune -> %u MHz (Pass 113)\n",
                     chan);
+            record_channel(l.cfg, chan);  // §15.2 Pass 210
             return "";
         };
         // §15.5 Pass 206: the operator's manual override — same local retune
@@ -837,6 +840,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
             tx.report_authority_clear();
             cur_chan = chan;
             wb_logf("move: local retune -> %u MHz (Pass 206)\n", chan);
+            record_channel(l.cfg, chan);  // §15.2 Pass 210
             return {200, "{\"ok\":true}"};
         };
         // §11.4a Pass 113 runtime pairing gate. false = fresh token + new
@@ -1005,6 +1009,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
         runtime_info->publish_status(std::move(s));
         next_status = at_ms + 1000;
     };
+    bool csa_was_committed = false;
     while (stop == 0) {
         // One timestamp per iteration: every callback and the tick share it,
         // so the time injected into the core never steps backward between
@@ -1025,6 +1030,12 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
         // another block can be constructed with the previous owner's jumbo
         // budget.
         const CsaAction ca = csa.tick(now_us_it);
+        // §15.2 Pass 210: the COMMITTED edge (the confirm lands in
+        // service_air or this tick) is the landing worth keeping.
+        if (csa.committed() != csa_was_committed) {
+            csa_was_committed = csa.committed();
+            if (csa_was_committed) record_channel(l.cfg, cur_chan);
+        }
         if (ca.kind != CsaAction::Kind::kNone) {
             const bool retuned =
                 air.value->retune_all(ca.chan_mhz, ca.bw, ca.fast);

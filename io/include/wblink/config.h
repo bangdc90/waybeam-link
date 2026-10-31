@@ -335,6 +335,8 @@ struct CsaPolicy {
     uint32_t ack_timeout_ms = 1000;
     uint32_t bind_release_s = 90;    // §11.5a command-source binding release
     bool persist_channel = false;    // §11.5 boot onto last-committed channel
+    // §15.2 Pass 210: where persist_channel keeps its {"mhz":N} record.
+    std::string persist_file = "/etc/waybeam-link/channel.json";
     uint16_t home_chan = 0;  // config-pinned power-on default (§11.1, §11.5)
     std::vector<uint16_t> channel_allowlist;
     // Tier-2 seed (findings.md 2026-08-16): how far a channel's measured

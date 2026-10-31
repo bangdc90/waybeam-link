@@ -391,6 +391,7 @@ target_compile_options(wblink_core PRIVATE ${WBLINK_WARNINGS})
 # nlohmann/json (io layer only — core must stay dependency-free).
 add_library(wblink_io STATIC
     io/src/adapter_elect.cpp
+    io/src/channel_persist.cpp
     io/src/config.cpp
     io/src/config_registry.cpp
     io/src/log.cpp
