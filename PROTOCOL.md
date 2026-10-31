@@ -1300,6 +1300,16 @@ reboot; a step `|s − s_prev| > 100 ms` (a restarted clock) clears the beacon
 window. The beacon estimate is stale 5 s after its newest beacon. The
 two-way estimate wins whenever it is fresh. Still observability only (§1).
 
+**Resuming two-way after a mute (Pass 211).** A two-way sample that arrives
+more than 5 s after the previous one **opens a new window**: the earlier
+samples are dropped, never filtered alongside the new ones. Their offsets are
+stale by drift, and the min-delay pick does not look at age — on the bench a
+surviving pre-mute sample shifted every latency readout after a channel switch
+by drift × time muted (+13 ms after ~5 min). Once `d0` is calibrated, a
+part-filled window does not displace the beacon estimate (one sample has no
+filter behind it): two-way wins again when its window of 8 is full and fresh,
+and only a full fresh window recalibrates `d0`.
+
 **Dwell protocol.** The receiver accumulates `received`/`rssi_sum` per
 `(run_id, dwell_id)`, deduplicating by `seq`. It closes the dwell and emits its
 tally on any of: `seq == count` arriving; the first probe of a **later**
@@ -5309,8 +5319,12 @@ Recommended seeds (config, §15.2; RE-DERIVE §17): `tail_grace_ms 1`,
   LINK_REPORT, verdict, recovery, claim, command or CSA copy), and the craft
   sees an uplink-free receiver. The TX adapter stays brought up, so
   `POST /api/v1/uplink` unmutes live with no restart. Auto-mute fires at most
-  once per process; any `POST /api/v1/uplink` disarms it. Latency stays
-  readable on TIME_BEACON (§3.16).
+  once per arming; any `POST /api/v1/uplink` disarms it, except
+  `{"tx":true,"auto_mute":true}`, which unmutes and **re-arms** it (Pass 211 —
+  e.g. for the length of a §11 channel switch). The readiness condition is
+  never met while a §11 campaign is in flight, and "fresh two-way" means a
+  full window of 8 (§3.16 Pass 211), so after a re-arm the hold starts on the
+  new channel. Latency stays readable on TIME_BEACON (§3.16).
 - `air.usb_tx_agg` (radio backend only, Pass 184; 0..3, default **0** = off)
   is how many already-decided frames the host may carry in ONE USB bulk-OUT
   transfer. It is a **carrier** choice, not a pacing one: it never changes
@@ -6469,7 +6483,7 @@ is `restart_required` and so is applied out-of-loop by a forked applier:
 | `POST /api/v1/fec` | `{ "stream_id": 0, "i_permille": 250, "p_permille": 100, "min_r": 2, "e_permille": 0 }` | retune a `frame-shm` stream's §14.1 FEC rates + minimum repair floor (TX node). `e_permille` (§14.1a) is optional and, like every other field here, participates in the POST's full-replacement semantics: omitting it — or sending `null` — restores the default of inheriting `p_permille`. **`min_k` is removed (Pass 205):** the `k ≤ min_k` ARQ-only gate it fed is gone |
 | `POST /api/v1/stats/reset` | `{}` | zero the cumulative counters — a clean measurement window |
 | `POST /api/v1/video/recover` | `{ "stream_id": 0 }` (optional with one latch) | RX emits one §3.9 recovery request for a latched RTP stream |
-| `POST /api/v1/uplink` | `{ "tx": true\|false }` | rx (Pass 208): unmute / mute the ground uplink live (`policy.uplink.auto_mute_s`); either value disarms a pending auto-mute. `tx` boolean required (400 otherwise); **409 on a node with no `role:"tx"` adapter**. Volatile: a restart returns to the config |
+| `POST /api/v1/uplink` | `{ "tx": true\|false, "auto_mute": bool? }` | rx (Pass 208): unmute / mute the ground uplink live (`policy.uplink.auto_mute_s`); either value disarms a pending auto-mute. Pass 211: `"auto_mute": true` with `"tx": true` unmutes and re-arms it instead (400 with `"tx": false`; 409 when `auto_mute_s` is 0). `tx` boolean required (400 otherwise); **409 on a node with no `role:"tx"` adapter**. Volatile: a restart returns to the config |
 | `GET /api/v1/bench/rx-drop` | — | RX-node local synthetic-loss state: `{permille,backend}` where `backend` is `udp` or `radio`. The value is process-volatile and applies before normal receive counters/processing. |
 | `POST /api/v1/bench/rx-drop` | `{ "permille": 0 }` | RX-node local debug control: retune independent synthetic loss per listener/adapter (0–1000) on UDP-air or RF. `0` clears immediately. This is local management HTTP only; it defines no RF control message. |
 | `POST /api/v1/air/ack_responder` | `{ "armed": true\|false }` | §3.0 arm/disarm the hardware ACK responder live, without a re-init (Pass 198). Local management HTTP only — it defines no RF control message and touches no peer. `armed:true` programs the node's own §3.0 SA as the responder MACID; `false` returns net_type to No Link. Volatile: a restart returns to `air.ack_responder`. **409 off the radio backend or on a node with no `role:"tx"` adapter**; **409 when `armed:true` is refused by the die** (the §3.0 loud-degrade path, now with a caller to tell). **An `armed:true` POST always re-attempts, even after a previous refusal** (Pass 200): `supported` is a cached answer, not a lockout, so the 409 reports THIS attempt's outcome rather than a remembered one. **This is the responder half ONLY, and the asymmetry is the point:** the soliciting side's `air.tx_retry_limit` and `air.ack_timeout_us` are consumed at devourer bring-up from an immutable `DeviceConfig`, so they have no live form and a full-hybrid A/B still costs a restart on the ground. A knob that toggled one half while silently pinning the other would read like an A/B and not be one, so the endpoint names which half it is |

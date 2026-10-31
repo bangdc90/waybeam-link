@@ -24,6 +24,35 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 211 — §3.16 two-way window restarts after a mute; §15.2/§15.5 auto-mute re-arm (2026-11-01)
+
+Operator report 2026-11-01: after a channel switch from the ground menu the
+OSD latency moved and stayed moved (53 → 66 ms on 5745, 58 on 5825, 71 back on
+5805) with no change in video; the operator suspected the time sync. Cause:
+the two-way window kept its pre-mute samples. Unmuting for the switch folded
+new samples beside ones minutes old, the min-delay pick chose by delay alone,
+and `calibrate` re-anchored `d0` on the stale offset — off by drift × time
+muted (43 ppm × ~5 min ≈ 13 ms), which the beacon estimate then carried on.
+
+Ruled:
+
+1. §3.16 — a two-way sample more than 5 s after the previous one opens a new
+   window. With `d0` calibrated, a part-filled window does not displace the
+   beacon estimate; only a full fresh window wins or recalibrates `d0`.
+2. §15.5 — `POST /api/v1/uplink {"tx":true,"auto_mute":true}` unmutes and
+   re-arms the Pass 208 auto-mute (400 with `tx:false`, 409 when
+   `auto_mute_s` is 0). Plain `{tx}` keeps disarming.
+3. §15.2 — auto-mute readiness also requires no §11 campaign in flight, so a
+   re-armed mute counts its `auto_mute_s` from the new channel.
+
+Estimator and control-plane only; no wire or config-key change.
+
+**Evidence.** Ground vdec log 2026-11-01 (per-switch latency plateaus).
+`tests/clock_sync_test.cpp` drift case: 10 min muted at 43 ppm, then one
+fresh sample with a longer delay — the pre-fix estimator returns the stale
+offset and moves `d0` (3 CHECKs fail), the fixed one keeps the beacon
+estimate until 8 fresh samples.
+
 ## Pass 210 — §15.2 `csa.persist_channel` implemented, both roles; `csa.persist_file` (2026-10-31)
 
 Operator request 2026-10-31: a channel changed from the ground menu must stay
