@@ -83,7 +83,10 @@ and slice concealment cover the residual. There is **no ARQ and no retransmit**
   first-class (§12).
 - No data-path authentication. No time synchronisation between TX and RX; all
   deadlines are RX-local wall-clock; all cross-node timing anchors on the
-  hardware TSF the radio latches per frame (§7).
+  hardware TSF the radio latches per frame (§7). The §3.16 TIME_REQ/TIME_RESP
+  clock-offset estimate (Pass 207) is **observability only** — it maps the
+  craft's capture timestamps onto the ground clock for a latency readout and
+  no deadline, selector or pacing decision consumes it.
 - Same-channel diversity (the craft has one channel at a time). Frequency changes
   happen only as a **coordinated follow-me switch** (§11), never per-packet.
 - Injected/broadcast frames get **no** 802.11 MAC ACK. There is no application
@@ -1172,7 +1175,10 @@ to Pass 152. Pass 153 retires that layout and re-purposes the type as the
 | `0x01` | `CAL_PROBE` | below |
 | `0x02` | `CAL_TALLY` | below |
 | `0x03` | `LINK_VERDICT` | below (Pass 159) |
-| `0x04`–`0xFF` | *unassigned* | additive growth allocates here |
+| `0x04` | `TIME_REQ` | below (Pass 207) |
+| `0x05` | `TIME_RESP` | below (Pass 207) |
+| `0x06` | `TIME_BEACON` | below (Pass 208) |
+| `0x07`–`0xFF` | *unassigned* | additive growth allocates here |
 
 An unknown ID is **ignored, not an error** (below) — that posture is what
 makes the registry the additive-growth channel, and the §3.1 version nibble
@@ -1227,6 +1233,72 @@ nothing the link carries in flight.
 | 20 | 4 | `rssi_sum_dbm` | two's-complement i32 wire image: sum of the accepted probes' `AirRxMeta.rssi`; mean = `rssi_sum_dbm / received` |
 | 24 | 1 | `rx_mcs` | delivered HT MCS of the most recently accepted probe; `0xFF` = unknown. The commanded-versus-delivered rung cross-check — the only evidence the radio honoured `set_tx_mode`, a failure this fleet has seen |
 | 25 | 1 | `adapter_fingerprint` | CRC-8/DVB-S2 of the receiver adapter's canonical calibration identity (§10.6 Pass 146 tiers) — the identity gate on the evidence source |
+
+**TIME_REQ (`0x04`) / TIME_RESP (`0x05`) — link clock-offset estimate
+(Pass 207).** Observability only (§1): lets a receiver map the craft's frame
+capture timestamps (§15.4 `VencFrameMeta.pts`) onto its own clock, so it can
+show glass-to-glass latency the way digital FPV goggles do. Both are
+exact-length and **addressed** (destination non-zero, enforced by encoder and
+decoder). All times are the sender's **monotonic microseconds** (u64,
+`CLOCK_MONOTONIC`); a craft MUST use the same clock whose low 32 bits it
+writes into `VencFrameMeta.pts`, or the offset maps nothing.
+
+TIME_REQ — exact 24 bytes:
+
+| off | size | field | notes |
+|---|---:|---|---|
+| 0 | 11 | *common* | §3.1 — sender = requester (the ground); `destination` = the craft |
+| 11 | 1 | `ext_type` | `0x04` |
+| 12 | 4 | `seq` | requester-chosen, echoed |
+| 16 | 8 | `t1_us` | requester clock when the frame is handed to the radio |
+
+TIME_RESP — exact 40 bytes:
+
+| off | size | field | notes |
+|---|---:|---|---|
+| 0 | 11 | *common* | §3.1 — sender = responder; `destination` = the requester |
+| 11 | 1 | `ext_type` | `0x05` |
+| 12 | 4 | `seq` | echo |
+| 16 | 8 | `t1_us` | echo |
+| 24 | 8 | `t2_us` | responder clock when the TIME_REQ was taken off the radio |
+| 32 | 8 | `t3_us` | responder clock when the TIME_RESP is handed to the radio |
+
+The requester stamps `t4` (its clock) on receipt and computes the NTP pair
+`offset = ((t2 − t1) + (t3 − t4)) / 2` (responder − requester) and
+`delay = (t4 − t1) − (t3 − t2)`. Queueing on either leg biases one sample by
+half its asymmetry, so the estimate is the offset of the **minimum-delay**
+sample among the last 8 (the NTP clock filter); it is stale once its newest
+sample is older than 5 s. Cadence: the requester emits 2 Hz, only to its
+selected originator, on the immediate return path (the §3.16 LINK_VERDICT
+inject, no quiet-gap hold — a held request would only add delay the filter
+then has to reject). The responder answers every TIME_REQ addressed to it and
+keeps no state. A pre-Pass-207 peer ignores both IDs, so the readout degrades
+to "latency unavailable", never to a fault.
+
+**TIME_BEACON (`0x06`) — one-way drift tracking for a silent ground (Pass
+208).** The two-way estimate needs the ground to transmit, and the two
+monotonic clocks drift tens of ppm apart (43 ppm measured, ≈2.5 ms/min), so
+an offset frozen when a ground stops transmitting is wrong within minutes.
+A craft that answers TIME_REQ also emits TIME_BEACON at 2 Hz, **broadcast**
+(destination `0`), on the plain inject (no quiet-gap hold), whether or not
+anyone listens. Exact 24 bytes:
+
+| off | size | field | notes |
+|---|---:|---|---|
+| 0 | 11 | *common* | §3.1 — sender = the craft; `destination` = `0` |
+| 11 | 1 | `ext_type` | `0x06` |
+| 12 | 4 | `seq` | sender counter, informational |
+| 16 | 8 | `t3_us` | sender clock (the `VencFrameMeta.pts` domain) when handed to the radio |
+
+A receiver from its clock peer stamps `t4` and keeps `s = t4 − t3` (its clock
+− craft clock, signed). Over the last 8 beacons `min s = d − offset`, where
+`d` is the one-way floor of a small frame. While a two-way estimate is fresh
+the receiver **calibrates** `d0 = offset₂ + min s`; once the two-way estimate
+is stale and `d0` is calibrated, `offset = d0 − min s` (source `beacon`).
+`d0` is a property of the path, not of either clock, so it survives a craft
+reboot; a step `|s − s_prev| > 100 ms` (a restarted clock) clears the beacon
+window. The beacon estimate is stale 5 s after its newest beacon. The
+two-way estimate wins whenever it is fresh. Still observability only (§1).
 
 **Dwell protocol.** The receiver accumulates `received`/`rssi_sum` per
 `(run_id, dwell_id)`, deduplicating by `seq`. It closes the dwell and emits its
@@ -5225,6 +5297,17 @@ Recommended seeds (config, §15.2; RE-DERIVE §17): `tail_grace_ms 1`,
   adapter). An RX node's `"dir":"in"` UDP stream is §7.5 uplink ingress
   (TELEMETRY/CONTROL only); the matching TX-node `"dir":"out"` stream is its
   delivery egress. `policy.uplink.*` seeds the §7.5 pacing knobs.
+- `policy.uplink.auto_mute_s` (rx node with a `role:"tx"` adapter, Pass 208;
+  default **0** = never) silences the ground uplink once the link no longer
+  needs it: when a stream is latched **and** the §3.16 clock is calibrated
+  (fresh two-way window of 8 plus a calibrated TIME_BEACON `d0`) have held
+  for this many seconds, the node **mutes**: every inject reports not-sent
+  and no §3.11 heartbeat is emitted — on air it is a §15.2 spectator (no
+  LINK_REPORT, verdict, recovery, claim, command or CSA copy), and the craft
+  sees an uplink-free receiver. The TX adapter stays brought up, so
+  `POST /api/v1/uplink` unmutes live with no restart. Auto-mute fires at most
+  once per process; any `POST /api/v1/uplink` disarms it. Latency stays
+  readable on TIME_BEACON (§3.16).
 - `air.usb_tx_agg` (radio backend only, Pass 184; 0..3, default **0** = off)
   is how many already-decided frames the host may carry in ONE USB bulk-OUT
   transfer. It is a **carrier** choice, not a pacing one: it never changes
@@ -6327,6 +6410,9 @@ plane supersedes the ground CSA stdin trigger, which is removed** — `POST
 | `GET /api/v1/info` | static identity: `role`, `node`, `session`, `table_version`, `streams[]`, `adapters[]` (each `{name, role, channel, mac, chip, part, aliases, power_actuator, ldpc_rx_flag, fastretune}` — `mac` is the §10.6 per-unit EFUSE identity on the radio backend, `null` where the backend reports none, Pass 154; `part` and `aliases` (Pass 195) name the DIE and its marketing aliases (`"RTL8822E"`, `"RTL8812EU/RTL8822EU"`), added because `chip` is the chip GENERATION and reads `jaguar3` for both an 8812EU and an 8812CU — which is exactly the distinction the §15.2 auto election turns on, so a consumer cannot name the dongle from `chip` alone; both are empty strings on a backend with no die, which a consumer must distinguish from a die it does not recognise; the capability fields are static per-die answers read once at bring-up, Pass 172: `chip` is the backend's chip-generation name (`"udp"` on the bench backend), `power_actuator` is §10.5's `actuator` discriminator as a boolean (Pass 171 — `false` = offsets are inert and refused), `ldpc_rx_flag` is per-frame LDPC *reporting* existing on this die (§15.3 Pass 157 — decode capability is separate), `fastretune` says the lean retune override exists), `build`; on a TX/craft node also the live self state `channel`, `psk_announced`, `claimed`, `claimed_by` (Pass 113) |
 | `GET /api/v1/features` | sanitized effective feature state loaded by this process: `{air:{backend,ldpc,stbc,mcs_probe_configured,mcs_probe_scheduled},video:{present,stream_id,direction,binding,fec:{scheme,i_permille,p_permille,e_permille,min_r},spatial_recovery:{mode,freeze_frame},jscc:{configured,enforce}},venc:{enabled,recovery_enabled,fps_ladder_boot,fps_ladder_enabled},csa:{home_chan,channel_allowlist:[]}}`. `video` describes the first configured RTP stream (the role's video stream); absent video uses `present:false` and neutral defaults. `fps_ladder_enabled` is a live gate; the other fields are the validated configuration/table actually loaded at process start. Pass 205 removed `arq_mode` / `arq_enabled` / `arq_effective`. `csa.channel_allowlist` (Pass 197) is §11.1 `policy.csa.channel_allowlist` verbatim, empty meaning reject-all, published because it is the only way a client can know which channels a §15.5a claim will accept — the refusal string covers allowlist, active-campaign and rate-limit alike. The PSK stays out: the key VALUE is the secret, the channel policy is not. No config path, bind address, PSK, or other secret-bearing field is returned. |
 | `GET /api/v1/health` | terse `{ state, mcs, profile, rssi_best, loss_milli, fps }` |
+| `GET /api/v1/clock` | rx (Pass 207): §3.16 TIME_REQ/RESP estimate `{valid, peer, offset_us, delay_us, samples, age_ms}`; `offset_us` = craft − ground monotonic µs; `valid:false` with no fresh sample. Pass 208 adds `source` (`two-way` \| `beacon`) and `d0_us` (calibrated TIME_BEACON floor, present once calibrated) |
+| `GET /api/v1/thermal` | rx, radio backend (Pass 209): `{adapters:[{name, tx, sampled, valid, raw, baseline, delta, bucket}]}` — each unit's chip thermal meter (RF 0x42), sampled every 5 s on the poll path. Realtek units of roughly 1.5–2 °C each, **not degrees**; `delta` = `raw` − EFUSE baseline is the heat signal, `bucket` is devourer's cool/warm/hot/critical label (`unknown` without a baseline). Observability only; nothing gates on it |
+| `GET /api/v1/uplink` | rx (Pass 208): `{tx_adapter, muted, auto_mute_s, auto_armed}` — whether this node can transmit, whether its uplink is muted, and whether the `policy.uplink.auto_mute_s` mute is still pending |
 | `GET /api/v1/discovery` | bounded passive discovery: `{nodes:[], streams:[]}` from HEARTBEAT/ANNOUNCE/DATA observations |
 | `GET /api/v1/scout/results` | current scout state: `{scanning, current_chan, channels:[], candidates:[], candidate_sightings:[], ranking:{rounds, domain, confidence_permille, rejects:{}, recommendation:{}, bins:[]}}`; `candidates` is resolved/deduplicated, sightings are diagnostic. Each `candidates[]` row carries `rssi_dbm`: the **strongest** RSSI decoded from that originator on its resolved channel, or `null` if no frame reported one — a "which craft is nearest" indicator, not a link-budget figure (§15.5a; ground/rx node) |
 | `GET /api/v1/link/selection` | receiver's configured/latched/claiming/committed/spectating vehicle tuple and cache-follow readiness (§15.5a) |
@@ -6369,6 +6455,7 @@ is `restart_required` and so is applied out-of-loop by a forked applier:
 | `POST /api/v1/fec` | `{ "stream_id": 0, "i_permille": 250, "p_permille": 100, "min_r": 2, "e_permille": 0 }` | retune a `frame-shm` stream's §14.1 FEC rates + minimum repair floor (TX node). `e_permille` (§14.1a) is optional and, like every other field here, participates in the POST's full-replacement semantics: omitting it — or sending `null` — restores the default of inheriting `p_permille`. **`min_k` is removed (Pass 205):** the `k ≤ min_k` ARQ-only gate it fed is gone |
 | `POST /api/v1/stats/reset` | `{}` | zero the cumulative counters — a clean measurement window |
 | `POST /api/v1/video/recover` | `{ "stream_id": 0 }` (optional with one latch) | RX emits one §3.9 recovery request for a latched RTP stream |
+| `POST /api/v1/uplink` | `{ "tx": true\|false }` | rx (Pass 208): unmute / mute the ground uplink live (`policy.uplink.auto_mute_s`); either value disarms a pending auto-mute. `tx` boolean required (400 otherwise); **409 on a node with no `role:"tx"` adapter**. Volatile: a restart returns to the config |
 | `GET /api/v1/bench/rx-drop` | — | RX-node local synthetic-loss state: `{permille,backend}` where `backend` is `udp` or `radio`. The value is process-volatile and applies before normal receive counters/processing. |
 | `POST /api/v1/bench/rx-drop` | `{ "permille": 0 }` | RX-node local debug control: retune independent synthetic loss per listener/adapter (0–1000) on UDP-air or RF. `0` clears immediately. This is local management HTTP only; it defines no RF control message. |
 | `POST /api/v1/air/ack_responder` | `{ "armed": true\|false }` | §3.0 arm/disarm the hardware ACK responder live, without a re-init (Pass 198). Local management HTTP only — it defines no RF control message and touches no peer. `armed:true` programs the node's own §3.0 SA as the responder MACID; `false` returns net_type to No Link. Volatile: a restart returns to `air.ack_responder`. **409 off the radio backend or on a node with no `role:"tx"` adapter**; **409 when `armed:true` is refused by the die** (the §3.0 loud-degrade path, now with a caller to tell). **An `armed:true` POST always re-attempts, even after a previous refusal** (Pass 200): `supported` is a cached answer, not a lockout, so the 409 reports THIS attempt's outcome rather than a remembered one. **This is the responder half ONLY, and the asymmetry is the point:** the soliciting side's `air.tx_retry_limit` and `air.ack_timeout_us` are consumed at devourer bring-up from an immutable `DeviceConfig`, so they have no live form and a full-hybrid A/B still costs a restart on the ground. A knob that toggled one half while silently pinning the other would read like an A/B and not be one, so the endpoint names which half it is |

@@ -24,6 +24,80 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 209 — §15.5 `GET /api/v1/thermal`: chip thermal meter for the ground OSD (2026-10-31)
+
+Operator request 2026-10-31: show both ground RTL8812AU temperatures on the
+OSD. The RF 0x42 meter was only reachable through the bench
+`WBLINK_THERMAL_LOG_S` log; one unit later stalled while reading "critical".
+
+Ruled:
+
+1. §15.5 — `GET /api/v1/thermal` (rx, radio backend) returns per adapter
+   `{name, tx, sampled, valid, raw, baseline, delta, bucket}`, sampled every
+   5 s on the poll path. Units stay Realtek meter units, not °C — no transfer
+   function is published, and the endpoint must not imply one.
+2. Observability only; nothing gates on it. No §15.3 stats field added.
+
+Additive: one read-only route; no wire or config change.
+
+**Evidence.** Bench 2026-10-31 log: `au-uplink raw=54 baseline=26 delta=28
+critical`, `au-diversity raw=54 baseline=31 delta=23 hot`.
+
+## Pass 208 — §3.16 TIME_BEACON + `policy.uplink.auto_mute_s`: silent ground after sync (2026-10-31)
+
+Operator ruling 2026-10-31: the ground transmitter should only run until the
+video link and the time sync are established, then stop; a key menu will turn
+it back on later. Muting the two-way §3.16 exchange freezes the offset, and the
+bench pair drifts 43 ppm (2.5 ms in 58 s), so a frozen offset misreads latency
+within minutes.
+
+Ruled:
+
+1. §3.16 — extended ID `0x06` TIME_BEACON (24 B, exact-length, broadcast):
+   the craft emits its clock at 2 Hz unsolicited. The receiver calibrates the
+   one-way floor `d0 = offset₂ + min(t4 − t3)` while two-way is fresh, then
+   tracks `offset = d0 − min(t4 − t3)` (window 8, stale 5 s, >100 ms step
+   clears the window). Two-way wins when fresh. Observability only (§1).
+2. §15.2 — `policy.uplink.auto_mute_s` (default 0 = never): latched stream +
+   calibrated clock held this long ⇒ the uplink mutes (all injects not-sent,
+   no heartbeat; on air a spectator). Fires once per process.
+3. §15.5 — `GET`/`POST /api/v1/uplink` (`{tx}`) read and set the mute live;
+   a POST disarms a pending auto-mute. `GET /api/v1/clock` gains `source`
+   and `d0_us`.
+
+Additive: a pre-208 ground ignores `0x06`; a pre-208 craft sends no beacon,
+so its muted ground loses the readout only. No §15.3 field added.
+
+**Evidence.** Bench 2026-10-31, `GET /api/v1/clock` offset
+−12438917046 → −12438919550 µs over 58 s.
+
+## Pass 207 — §3.16 TIME_REQ/TIME_RESP: link clock-offset estimate for a latency readout (2026-10-31)
+
+The ground could not show glass-to-glass latency in the field: every frame
+already carries the craft's capture time (§15.4 `VencFrameMeta.pts`, craft
+`CLOCK_MONOTONIC` µs), but in the craft's clock, and §1 had no time sync.
+Operator ruling 2026-10-31: sync over the WiFi link (option A), as digital FPV
+systems do, for an on-screen latency readout.
+
+Ruled:
+
+1. §3.16 — extended IDs `0x04` TIME_REQ (24 B) and `0x05` TIME_RESP (40 B),
+   exact-length, addressed. NTP four-timestamp exchange in monotonic µs; the
+   craft MUST answer in the clock domain of its `VencFrameMeta.pts`.
+2. Estimate = min-delay sample of the last 8 (NTP clock filter); stale after
+   5 s. Requester cadence 2 Hz to the selected originator on the immediate
+   (LINK_VERDICT) return inject; responder stateless.
+3. §1 — the no-time-sync statement stands for every decision path: the
+   offset is observability only; nothing gates on it.
+4. §15.5 — `GET /api/v1/clock` on rx exposes the estimate.
+
+Additive: pre-207 peers ignore unknown IDs (§3.16), so a mixed pair loses
+only the readout. No §15.3 stats field and no config key added.
+
+**Evidence.** Bench 2026-10-31: Ethernet-referenced probe
+(`tools/latency/latency_collect.py`) gives the per-stage baseline the link
+estimate is checked against.
+
 ## Pass 206 — `/move` is a local detach-and-retune, and a spectating rx node auto-adopts by sticky first-admitted (2026-09-13)
 
 The link could be moved two ways and neither was a plain operator override:
