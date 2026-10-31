@@ -1836,11 +1836,18 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                        ",\"auto_armed\":" +
                        (auto_mute_armed ? "true" : "false") + "}";
             };
-            h.uplink_set = [&](bool tx) -> std::string {
-                auto_mute_armed = false;
+            h.uplink_set = [&](bool tx, bool rearm) -> std::string {
+                if (rearm && l.cfg.policy.uplink.auto_mute_s == 0) {
+                    return "policy.uplink.auto_mute_s is 0: nothing to re-arm";
+                }
+                // Pass 211: re-arm = the boot rule again — mute once the
+                // stream is latched, no campaign is in flight and a full
+                // fresh two-way window has held auto_mute_s.
+                auto_mute_armed = rearm;
+                mute_ready_since_ms = 0;
                 air.value->tx_muted = !tx;
                 wb_logf("uplink: %s (POST /api/v1/uplink)\n",
-                        tx ? "unmuted" : "muted");
+                        !tx ? "muted" : rearm ? "unmuted, auto-mute re-armed" : "unmuted");
                 return "";
             };
         } else {
@@ -1848,7 +1855,7 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                 return std::string("{\"tx_adapter\":false,\"muted\":true,"
                                    "\"auto_mute_s\":0,\"auto_armed\":false}");
             };
-            h.uplink_set = [](bool) -> std::string {
+            h.uplink_set = [](bool, bool) -> std::string {
                 return "no role:\"tx\" adapter on this node";
             };
         }
@@ -3207,9 +3214,13 @@ art.craft_adapter_fingerprint = craft_tally_fp;
         }
         // §15.2 (Pass 208): mute the uplink once the latched stream and a
         // calibrated clock (fresh two-way + TIME_BEACON d0) held auto_mute_s.
+        // Pass 211: never while a §11 campaign is in flight (the craft must
+        // hear it), and "fresh two-way" is a full window — so after a
+        // re-arm the count starts on the new channel, not before the switch.
         if (auto_mute_armed) {
             const auto ce = clock_sync.estimate(now_us());
             const bool ready = active_selection.originator != 0 &&
+                               !issuer.active() &&
                                clock_sync.d0_us().has_value() && ce &&
                                !ce->beacon;
             if (!ready) {

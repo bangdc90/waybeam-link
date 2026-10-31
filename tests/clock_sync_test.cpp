@@ -2,6 +2,9 @@
 // §3.16 (Pass 207) ClockSync: NTP offset/delay arithmetic, min-delay filter,
 // staleness, and rejection of impossible timestamp sets.
 #include "wblink/clock_sync.h"
+
+#include <cstdlib>
+
 #include "wbtest.h"
 
 using namespace wblink;
@@ -154,6 +157,62 @@ int main() {
         }
         cs.reset();
         CHECK(!cs.d0_us().has_value());
+    }
+    // §3.16 Pass 211: unmuting after a long mute must not reuse pre-mute
+    // two-way samples. 43 ppm drift for 10 min is 25.8 ms; the old samples
+    // have the LOWER delay, so a filter that mixes them in picks a stale one
+    // (the bench symptom: latency +13 ms after a channel switch).
+    {
+        ClockSync cs;
+        const int64_t off = 7'000'000;
+        auto craft = [&](uint64_t g) {  // craft clock runs 43 ppm fast
+            return static_cast<uint64_t>(static_cast<int64_t>(g) + off +
+                                         static_cast<int64_t>(g / 1'000'000) * 43);
+        };
+        auto truth = [&](uint64_t g) {
+            return static_cast<int64_t>(craft(g)) - static_cast<int64_t>(g);
+        };
+        uint64_t g = 1'000'000'000;
+        for (size_t i = 0; i < ClockSync::kWindow; ++i) {  // boot: 1 ms legs
+            CHECK(cs.on_sample(g, craft(g + 1'000), craft(g + 1'000), g + 2'000));
+            cs.on_beacon(craft(g + 200'000), g + 200'000 + 900);
+            g += 500'000;
+        }
+        CHECK(cs.d0_us().has_value());
+        for (int i = 0; i < 1200; ++i) {  // 10 min muted: beacons only
+            cs.on_beacon(craft(g), g + 900);
+            g += 500'000;
+        }
+        // Tolerance 0.5 ms: drift across one 4 s window is ~0.17 ms; the
+        // stale-sample error this guards against is 25.8 ms.
+        constexpr int64_t kTol = 500;
+        auto e = cs.estimate(g);
+        CHECK(e.has_value() && e->beacon);
+        if (e) CHECK(std::llabs(e->offset_us - truth(g)) <= kTol);
+        const int64_t d0 = cs.d0_us() ? *cs.d0_us() : 0;
+        // Unmuted: a fresh sample with 2 ms legs (worse than the boot ones).
+        CHECK(cs.on_sample(g, craft(g + 2'000), craft(g + 2'000), g + 4'000));
+        cs.on_beacon(craft(g + 100'000), g + 100'000 + 900);
+        e = cs.estimate(g + 100'000);
+        CHECK(e.has_value());
+        if (e) {
+            CHECK(e->beacon);  // part-filled window: beacon estimate stands
+            CHECK(std::llabs(e->offset_us - truth(g)) <= kTol);
+        }
+        CHECK(cs.d0_us() && *cs.d0_us() == d0);  // not re-anchored on stale data
+        for (size_t i = 1; i < ClockSync::kWindow; ++i) {
+            g += 500'000;
+            CHECK(cs.on_sample(g, craft(g + 2'000), craft(g + 2'000), g + 4'000));
+            cs.on_beacon(craft(g + 100'000), g + 100'000 + 900);
+        }
+        e = cs.estimate(g + 100'000);
+        CHECK(e.has_value());
+        if (e) {
+            CHECK(!e->beacon);  // full fresh window: two-way again
+            CHECK(e->samples == ClockSync::kWindow);
+            CHECK(std::llabs(e->offset_us - truth(g)) <= kTol);
+        }
+        CHECK(cs.d0_us() && std::llabs(*cs.d0_us() - 900) <= kTol);
     }
     return wbtest_finish("clock_sync_test");
 }

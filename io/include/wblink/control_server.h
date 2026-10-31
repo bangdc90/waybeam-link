@@ -81,9 +81,10 @@ struct ControlHandlers {
     // air.ack_responder. Returns "" on success, else the refusal.
     std::function<std::string(bool armed)> ack_responder_set;
     // §15.5 (Pass 208) POST /api/v1/uplink {tx}: unmute (true) / mute (false)
-    // the ground uplink live; disarms a pending auto-mute. "" on success,
-    // else the refusal (no role:"tx" adapter).
-    std::function<std::string(bool tx)> uplink_set;
+    // the ground uplink live; disarms a pending auto-mute. Pass 211:
+    // {tx:true, auto_mute:true} unmutes and RE-ARMS it instead. "" on
+    // success, else the refusal (no role:"tx" adapter, or nothing to re-arm).
+    std::function<std::string(bool tx, bool rearm)> uplink_set;
     // e_permille: §14.1a third class; nullopt = inherit p_permille. The
     // POST is a full replacement, so an omitted e_permille restores that.
     std::function<std::string(int stream_id, int i_permille, int p_permille,

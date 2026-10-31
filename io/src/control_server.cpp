@@ -694,7 +694,17 @@ void ControlServer::dispatch(Conn& c, const std::string& method,
         if (!j.contains("tx") || !j["tx"].is_boolean()) {
             return reply(400, "Bad Request", json_err("tx boolean required"));
         }
-        const std::string err = h_.uplink_set(j["tx"].get<bool>());
+        // Pass 211: optional auto_mute re-arms the Pass 208 mute (unmute
+        // only — re-arming a mute that is already in force means nothing).
+        if (j.contains("auto_mute") && !j["auto_mute"].is_boolean()) {
+            return reply(400, "Bad Request", json_err("auto_mute must be boolean"));
+        }
+        const bool rearm = j.value("auto_mute", false);
+        if (rearm && !j["tx"].get<bool>()) {
+            return reply(400, "Bad Request",
+                         json_err("auto_mute re-arms an unmuted uplink: tx must be true"));
+        }
+        const std::string err = h_.uplink_set(j["tx"].get<bool>(), rearm);
         return err.empty() ? reply(200, "OK", json_ok())
                            : reply(409, "Conflict", json_err(err));
     }

@@ -35,6 +35,15 @@ class ClockSync {
         const uint64_t round = t4 - t1;
         const uint64_t hold = t3 - t2;
         if (hold > round) return false;
+        // §3.16 (Pass 211): a sample after the window went stale (a muted
+        // uplink) opens a new window. The old offsets are stale by clock
+        // drift — 43 ppm on the bench pair is 2.6 ms a minute — and the
+        // min-delay pick does not look at age, so one surviving pre-mute
+        // sample shifted every latency readout after a channel switch.
+        if (count_ > 0 && t4 > last_t4_us_ && t4 - last_t4_us_ > kStaleUs) {
+            count_ = next_ = 0;
+        }
+        last_t4_us_ = t4;
         Sample s;
         // (t2 − t1) + (t3 − t4) in signed space: the two clocks are unrelated
         // monotonic origins, so either term can be hugely negative.
@@ -72,13 +81,17 @@ class ClockSync {
     // The min-delay sample of the window, or nullopt when there is none or
     // the newest is older than kStaleUs at `now_us`.
     // Two-way when fresh; else (Pass 208) d0 − min s over a fresh beacon
-    // window once d0 is calibrated; else nullopt.
+    // window once d0 is calibrated; else nullopt. Once d0 exists (Pass 211)
+    // a part-filled two-way window — the first seconds after an unmute —
+    // does not displace the beacon estimate: one sample has no min-delay
+    // filter behind it.
     std::optional<Estimate> estimate(uint64_t now_us) const {
-        if (auto e = two_way(now_us)) return e;
-        if (!d0_ || bcount_ == 0) return std::nullopt;
+        const auto tw = two_way(now_us);
+        if (tw && (!d0_ || count_ >= kWindow)) return tw;
+        if (!d0_ || bcount_ == 0) return tw;
         uint64_t newest = 0;
         const int64_t m = beacon_min(&newest);
-        if (now_us > newest && now_us - newest > kStaleUs) return std::nullopt;
+        if (now_us > newest && now_us - newest > kStaleUs) return tw;
         Estimate e;
         e.offset_us = *d0_ - m;
         e.delay_us = *d0_;
@@ -90,6 +103,7 @@ class ClockSync {
 
     void reset() {
         count_ = next_ = 0;
+        last_t4_us_ = 0;
         bcount_ = bnext_ = 0;
         d0_.reset();
     }
@@ -145,6 +159,7 @@ class ClockSync {
     std::array<Sample, kWindow> ring_{};
     size_t count_ = 0;
     size_t next_ = 0;
+    uint64_t last_t4_us_ = 0;  // newest two-way receipt, for the Pass 211 restart
     std::array<Beacon, kWindow> bring_{};
     size_t bcount_ = 0;
     size_t bnext_ = 0;
