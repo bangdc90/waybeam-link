@@ -4251,7 +4251,9 @@ target) bounds that to ~1 s against a 10.9-33.6 s full sweep.
 - **`home_chan` is a power-on default only**, no longer a mid-flight rendezvous:
   a craft holding any channel stays findable via the §15.5 scout sweep. With
   `persist_channel` (§15.2) the craft instead boots onto its last-committed
-  channel; claim/bind state (§11.5a) always resets on boot regardless.
+  channel — and, since Pass 210, a ground with the same key boots onto its last
+  confirmed one, so a channel moved from the ground survives a power cycle at
+  both ends; claim/bind state (§11.5a) always resets on boot regardless.
 
   **CLARIFIED (Pass 195).** In the array form the power-on channel is
   `adapters[].channel`, which is required per stanza; `home_chan` names the
@@ -5275,6 +5277,7 @@ Recommended seeds (config, §15.2; RE-DERIVE §17): `tail_grace_ms 1`,
                 "rx_liveness_ms": 750,
                 "min_interval_s": 5, "ack_timeout_ms": 1000,
                 "bind_release_s": 90, "persist_channel": false,
+                "persist_file": "/etc/waybeam-link/channel.json",
                 "home_chan": 5805, "channel_allowlist": [5745, 5805, 5825] },
     "cmd":    { "copies": 3, "copy_interval_ms": 20, "echo_copies": 2,
                 "ack_timeout_ms": 1000, "retry_cap": 3,
@@ -5587,6 +5590,17 @@ Recommended seeds (config, §15.2; RE-DERIVE §17): `tail_grace_ms 1`,
   (§11.5a); `csa.persist_channel` (default `false`) boots the craft onto its
   last-committed channel instead of `home_chan`. The former `rendezvous_timeout_s`
   is **removed** — COMMITTED now holds until reboot (§11.5, Pass 59).
+  **Implemented, both roles (Pass 210).** The record is `csa.persist_file`
+  (default `/etc/waybeam-link/channel.json`), one object `{"mhz":N}`, written
+  temp-then-rename. A node writes it each time it lands on a channel by intent:
+  the §11.5 COMMITTED edge and a successful `POST /api/v1/channel` or
+  `/api/v1/move` (tx); a §11.6 campaign closing with craft video seen and a
+  successful `/api/v1/move` (rx). Nothing else writes it — an unconfirmed
+  campaign, a scout sweep, or a §11.6 RX-liveness re-init leaves the record
+  alone. At start, a valid record (`mhz` 1..65535) replaces every
+  `adapters[].channel` (and the auto-form channel) before the radios come up;
+  an absent, unreadable or malformed record is logged and ignored, and the
+  config channel stands. Claim/bind state still resets on boot.
 - `policy.cmd` seeds the §11.7 VEHICLE_CMD campaign (issuer side:
   `copies`/`copy_interval_ms`/`ack_timeout_ms`/`retry_cap`; craft side:
   `echo_copies`/`min_interval_ms`). All §17 RE-DERIVE seeds. The channel shares

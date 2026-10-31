@@ -24,6 +24,36 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 210 — §15.2 `csa.persist_channel` implemented, both roles; `csa.persist_file` (2026-10-31)
+
+Operator request 2026-10-31: a channel changed from the ground menu must stay
+changed after a reboot, camera and ground alike ("sync up with ground frequency
+when save is selected"). `persist_channel` was ruled in Pass 59 for the craft
+but no code path read it; `/channel` and `/move` documented themselves as
+volatile.
+
+Ruled:
+
+1. §15.2 — `policy.csa.persist_file` (string, default
+   `/etc/waybeam-link/channel.json`) holds `{"mhz":N}`, written temp-then-rename.
+2. With `persist_channel`, a node records the channel each time it lands on
+   one by intent: tx — the §11.5 COMMITTED edge, successful `/channel` and
+   `/move`; rx — a §11.6 campaign that closes with craft video seen, and a
+   successful `/move`. Unconfirmed campaigns, scout sweeps and §11.6
+   RX-liveness re-inits never write it.
+3. At start the record replaces every `adapters[].channel` (and the auto-form
+   channel) before bring-up. Absent/malformed/out-of-range (`mhz` outside
+   1..65535) records are logged and ignored. No allowlist test at boot: the
+   file is only ever written after a retune the radio accepted, and `/move` is
+   deliberately off-allowlist.
+4. Default stays `false`; claim/bind state still resets on boot (Pass 59).
+
+Node-local; no wire, table-hash, or peer-visible change. One new config key.
+
+**Evidence.** `tests/channel_persist_test.cpp` (round trip, flag gate, ignored
+records). Bench 2026-10-31 scout sweep: candidate 17 on 5805 at −38 dBm, link
+held latched throughout on the diversity ear.
+
 ## Pass 209 — §15.5 `GET /api/v1/thermal`: chip thermal meter for the ground OSD (2026-10-31)
 
 Operator request 2026-10-31: show both ground RTL8812AU temperatures on the
