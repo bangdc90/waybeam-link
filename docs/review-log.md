@@ -24,6 +24,33 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 215 — §3.12 ANNOUNCE `tx_power_tier`; §15.2 `policy.cmd.persist_tx_power` (2026-11-01)
+
+Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.2,
+option "camera reports power", chosen over a save-and-restart flow): the ground
+must show the camera's real TX power, and a power choice must survive a camera
+reboot. No packet carried power, and a Pass 214 tier was lost on reboot.
+
+Ruled:
+
+1. §3.12 — ANNOUNCE `flags` bits 2–4 are `tx_power_tier`: 0 = no `0x0A` tier
+   held, 1–5 = tier 0–4, 6–7 a decode error; bits 5–7 stay reserved. Advisory,
+   unauthenticated, read by no decision. Length unchanged (30 bytes); a craft
+   with no tier sends the old bytes. A pre-215 receiver rejects an ANNOUNCE
+   with the bits set, so craft and ground update together.
+2. §15.2 — `policy.cmd.persist_tx_power` (bool, default false) and
+   `policy.cmd.tx_power_file` (default `/etc/waybeam-link/power.json`): the
+   craft records each accepted tier atomically and re-selects it at boot after
+   the §10.5 boot offset; a record past the list is ignored and logged.
+3. §11.7 `0x0A` — volatile unless persisted; the held tier is advertised.
+4. §15.5 — `/discovery` ANNOUNCE nodes carry `tx_power_tier` (`-1` = none).
+
+Not changed: the ground uplink's own tier (not advertised, not persisted).
+
+**Evidence.** `tests/wire_roundtrip_test.cpp` (tier bits round trip, 6–7
+rejected), `tests/node_discovery_test.cpp` (JSON field), `tests/power_persist_test.cpp`
+(record read/write/reject), device check from the ground menu (plan §T9.2).
+
 ## Pass 214 — §11.7 `0x0C` PROFILE; `0x0A` sets the offset on a curve-less relative craft (2026-11-01)
 
 Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.2,
