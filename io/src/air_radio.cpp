@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "wblink/air_radio.h"
+#include "wblink/precise_sleep.h"
 
 #include <libusb.h>
 
@@ -461,6 +462,11 @@ struct RadioAir::Impl {
         if (im->trace_usb_rx && ev_contains(buf, n, "\"rx.ring\"", 9)) {
             wb_logf("%.*s", static_cast<int>(n), buf);
         }
+        // devourer's init stage timer: a handful of lines per bring-up, and
+        // the only record of where a slow adapter start spends its time.
+        if (ev_contains(buf, n, "\"init.timing\"", 13)) {
+            wb_logf("radio: %.*s", static_cast<int>(n), buf);
+        }
         return static_cast<ssize_t>(n);
     }
     // Human-diagnostics sink: forward everything except the per-packet
@@ -842,6 +848,9 @@ uint16_t RadioAir::rx_drop_permille() const {
 }
 
 Result<RadioAir> RadioAir::create(RadioAirCfg cfg) {
+    // devourer's per-write µs delays: spin, not a kernel tick each, for the
+    // whole bring-up (wblink/precise_sleep.h).
+    PreciseSleepScope precise_sleep;
     // §15.2 (Pass 195). Under auto the stanza array does not exist yet: it is
     // built from the device set below, and roles are elected only after
     // bring-up, because the die is not knowable from the USB descriptor.

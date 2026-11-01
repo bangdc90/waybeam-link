@@ -393,6 +393,7 @@ add_library(wblink_io STATIC
     io/src/adapter_elect.cpp
     io/src/channel_persist.cpp
     io/src/config.cpp
+    io/src/precise_sleep.cpp
     io/src/config_registry.cpp
     io/src/log.cpp
     io/src/udp.cpp
@@ -535,6 +536,24 @@ if(WBLINK_BUILD_APP)
     add_executable(waybeam-link app/main.cpp)
     if(DEFINED WBLINK_HI3536DV100_TOOLCHAIN)
         target_sources(waybeam-link PRIVATE cmake/glibc-2.36-compat.cpp)
+    endif()
+    # Radio bring-up on coarse-tick kernels (wblink/precise_sleep.h): wrap the
+    # libc nanosleep symbol so devourer's ~1 µs table delays can spin instead
+    # of costing a 10 ms tick each. musl/32-bit names it __nanosleep_time64.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        include(CheckCXXSourceCompiles)
+        check_cxx_source_compiles("#include <time.h>
+#if !(defined(_REDIR_TIME64) && _REDIR_TIME64)
+#error plain nanosleep
+#endif
+int main() { return 0; }" WBLINK_NANOSLEEP_TIME64)
+        if(WBLINK_NANOSLEEP_TIME64)
+            set(_wblink_nanosleep __nanosleep_time64)
+        else()
+            set(_wblink_nanosleep nanosleep)
+        endif()
+        target_sources(waybeam-link PRIVATE app/precise_sleep_wrap.cpp)
+        target_link_options(waybeam-link PRIVATE "LINKER:--wrap=${_wblink_nanosleep}")
     endif()
     target_compile_options(waybeam-link PRIVATE ${WBLINK_WARNINGS})
     target_link_libraries(waybeam-link PRIVATE wblink_io wblink_node)

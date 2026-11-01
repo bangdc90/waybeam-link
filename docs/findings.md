@@ -12,6 +12,39 @@ has closed, with a pointer to the Pass.
 
 ---
 
+## 2026-11-01 - RTL8812AU bring-up on 10 ms-tick kernels; GK7205 warm-reboot USB dropout
+
+Both OpenIPC targets (GK7205 camera, Hi3536 ground) report
+`clock_getres(CLOCK_MONOTONIC)` = 10 ms; 100 x `usleep(1)` took 1.19 s on the
+camera. devourer's `ODM_delay_us(1)` after PHY-table writes therefore cost a
+tick each: `init.timing` (now forwarded to the log) on the camera read
+`bb_config` 3461 ms, `rf_config` 4229 ms, `hal.total` 8.6 s — devourer's own
+x86 cold number for the 8812AU is 1.7 s. The encoder was stopped for one run
+and nothing moved, so it is not CPU contention.
+
+`app/precise_sleep_wrap.cpp` wraps the libc nanosleep symbol
+(`__nanosleep_time64` on musl/32-bit, `nanosleep` on glibc) and spins requests
+<= 200 µs while `RadioAir::create` runs (`wblink/precise_sleep.h`), only when
+the tick is coarser than 1 ms. Camera: `bb_config` 26-36 ms, `rf_config`
+264 ms, `hal.total` 1.22-1.33 s. Ground, per adapter: 58-65 / 283-289 /
+1.47-1.75 s; both adapters up 4.5 s after `S98vdec start` (was ~17 s). A 10 ms
+cap first: the next register read after power-on failed (`rtw_read(0005)`
+iostream error) 2 of 2 times, so the millisecond power-sequence waits keep
+their tick-rounded length — the chip appears to rely on it. Open: whether the
+200 µs cap ever trips the same way; one bench, two dies of one part.
+
+Separately, after a warm reboot (dongle keeps VBUS) the camera's RTL8812AU
+dropped off USB and re-enumerated during the first bring-up when started ~2 s
+after boot (2/2 boots, with and without `libusb_reset_device`), 1/2 at 3 s,
+0/1 at 10 s; `tuning.teardown_power_down=0` did not change the pattern in
+back-to-back restarts. The failed attempt spends 3 x 500 ms
+(`USB_TIMEOUT`) before exiting; the camera's `S39waybeam-link` restarts it
+after 0.2 s. Cold power-on (power supply switched on, camera logs read
+afterwards): no dropout, radio up on the first attempt. Camera reboot -> HDMI
+picture with the ground already running, waybeam boot layout of the same day:
+27.1 s before, 12.1-13.2 s after. Both boards powered together: ~26 s, bound by
+the ground (see `docs/boot-time.md`).
+
 ## 2026-10-29 - Hi3536 USB RX zero-copy incompatibility
 
 Ground `.233`, RTL8812AU pair, 5805 MHz/20 MHz: bulk-IN completions and eight
