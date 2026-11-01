@@ -24,6 +24,38 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 214 — §11.7 `0x0C` PROFILE; `0x0A` sets the offset on a curve-less relative craft (2026-11-01)
+
+Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.2,
+chosen options "up and down" power and MCS 1–5): the ground menu changes the
+camera's TX power and MCS in flight, same flow as the channel switch. Found
+first: the GK7205 craft has no curve and no artifact, so a `0x0A` tier was
+accepted and moved nothing; and no §11.7 command picks a rung.
+
+Ruled:
+
+1. §11.7 — new command `0x0C` PROFILE, `arg` = §3.6 profile `id` 0..4 (Pass 68
+   cap, no §3.14 change). Pins §9.7 `min==max==arg` through the same lever as
+   §15.5 `POST /api/v1/link/profile`; `0x02` run restores the boot envelope.
+   REJECTED when the table has no such `id` or a §10.6 run is active.
+   Craft-session volatile, not reset on binding release.
+2. §11.7 `0x0A` / §10.3 / §15.2 — on a **relative** craft whose curve does not
+   actuate, the selected `power_offset_presets_qdb` entry **is** the operating
+   offset: applied at once, re-asserted after retune/recovery, restored by
+   §10.5 `auto`. It may sit above `power_offset_qdb`, never above
+   `power_offset_max_qdb` (the load clamp is unchanged). Curve-actuating and
+   absolute nodes are unchanged; a held latch is still clamped by the tier.
+3. §15.5 — `GET /api/v1/tx/power_tier` `effective` is true for such a tier;
+   `POST /api/v1/vehicle/command` takes `"profile"`.
+
+Not changed: the ground uplink's local tier (`UplinkPower`) stays a ceiling —
+the uplink is auto-muted in flight (Pass 208), so there is no user for it yet.
+The wire format is unchanged.
+
+**Evidence.** `tests/node_tx_core_test.cpp` (PROFILE pin/reject, curve-less
+tier offset, retune re-assert, `auto` restore), `tests/vehicle_cmd_test.cpp`
+(name map); device check from the ground menu (plan §T9.2 results).
+
 ## Pass 213 — §15.4 VencFrameMeta v3: `frame_seq` + `stream_epoch`, ring v3; RX flag bit 4 FEC-repaired (2026-11-01)
 
 Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.1,
