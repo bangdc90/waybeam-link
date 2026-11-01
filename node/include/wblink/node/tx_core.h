@@ -767,6 +767,7 @@ struct TxCore {
     uint8_t boot_max_profile() const { return boot_max_profile_; }
     void set_profile_pin(uint8_t min_profile, uint8_t max_profile) {
         // The §9.4 probe follows within one tick (see refresh_probe).
+        cmd_profile_pin_.reset();  // §11.7 0x0C: last writer wins
         selector_.set_profile_pin(min_profile, max_profile);
     }
     // §15.5 Pass 103: forget the venc actuator's write-on-change cache so the
@@ -811,6 +812,7 @@ struct TxCore {
             case vcmd_id::kSelector:
                 if (arg > 1) return false;
                 cmd_selector_frozen_ = arg != 0;
+                cmd_profile_pin_.reset();  // §11.7: last writer wins
                 // §11.7: the pin lands at the next evaluate() — during a
                 // §11.3 freeze the rung cannot move, so sampling now equals
                 // sampling at freeze-lift.
@@ -894,6 +896,21 @@ struct TxCore {
                 // 0x04-0x06 preset commands — an index with no configured
                 // entry is consumed and REJECTED, never silently clamped.
                 return set_power_tier(arg);
+            case vcmd_id::kProfile: {
+                // §11.7 0x0C (Pass 214): select-and-hold one §3.6 profile id —
+                // the §15.5 link/profile lever. An id not in the table is
+                // REJECTED, not saturated to the top rung as §9.7 would (Pass
+                // 83), and a §10.6 run owns the pin.
+                if (calibrating() || table_ == nullptr) return false;
+                bool known = false;
+                for (const Profile& p : table_->profiles) {
+                    known = known || p.id == arg;
+                }
+                if (!known) return false;
+                cmd_profile_pin_ = arg;
+                selector_.set_profile_pin(arg, arg);
+                return true;
+            }
             case vcmd_id::kMtuTier: {
                 if (!mtu_tier::valid(arg)) return false;
                 const uint16_t requested = mtu_tier::budget(arg);
@@ -1326,9 +1343,11 @@ struct TxCore {
         if (calibrator_ && power_tier_ceiling()) {
             init_calibration(calib_policy_, power_tier_ceiling());
         }
-        // Re-resolve once at the committed operating point. On a node with no
-        // curve this resolves to nullopt and moves nothing — §10.3 (Pass 134):
-        // the ceiling binds only where a number of ours reaches the actuator.
+        // Re-resolve once at the committed operating point. On an absolute
+        // node with no curve this resolves to nullopt and moves nothing —
+        // §10.3 (Pass 134): the ceiling binds only where a number of ours
+        // reaches the actuator. A relative node always has one, the boot
+        // offset, and with no actuating curve the tier replaces it (Pass 214).
         if (power_override_) {
             // §10.5 says the ceiling is the only clamp on a latch, so a
             // lowered tier must re-assert it through the NEW clamp. Skipping
@@ -1336,6 +1355,8 @@ struct TxCore {
             // some unrelated event re-applied it — a tier that visibly did
             // nothing, which is the worst outcome for a safety control.
             set_power_override(*power_override_);
+        } else if (tier_sets_offset()) {
+            apply_boot_power_offsets();
         } else if (last_commit_mcs_) {
             resolve_and_apply_power(*last_commit_mcs_, last_commit_level_);
         }
@@ -1385,8 +1406,26 @@ struct TxCore {
         // that clamps an offset-space curve, so it is effective on exactly
         // the same condition as an absolute one — curve_actuates() already
         // encodes the extra requirement that a relative curve be
-        // calibration-authored.
-        return curve_actuates();
+        // calibration-authored. Pass 214: with no actuating curve, a relative
+        // tier sets the offset itself, so it binds wherever a list exists.
+        return curve_actuates() ||
+               (tier_sets_offset() && !power_presets().empty() &&
+                static_cast<bool>(apply_power_offset));
+    }
+
+    // §11.7 0x0A (Pass 214): on a relative node whose curve does not actuate,
+    // a held tier IS the operating offset rather than a ceiling over nothing.
+    bool tier_sets_offset() const {
+        return backend_relative_ && !curve_actuates();
+    }
+    // The held tier's preset when it replaces this target's §10.5 boot
+    // offset (Pass 214); nullopt = the boot offset stands.
+    std::optional<int32_t> tier_offset(const PowerTarget& t) const {
+        if (tier_sets_offset() && power_tier_ >= 0 &&
+            static_cast<size_t>(power_tier_) < t.presets_qdb.size()) {
+            return t.presets_qdb[static_cast<size_t>(power_tier_)];
+        }
+        return std::nullopt;
     }
 
     // The one predicate for "resolve_and_apply_power() will reach hardware".
@@ -1447,18 +1486,19 @@ struct TxCore {
     // §10.5 (Pass 150): the forced safe boot point. Applied once at startup on
     // every role:"tx" adapter so no node ever transmits at the uncharacterised
     // efuse default (offset 0), which Pass 150 measured as a compressing
-    // operating point on the fleet's 8822EU.
+    // operating point on the fleet's 8822EU. Re-asserts and Pass 214 tier
+    // changes land here too, so a held curve-less tier survives a retune.
     void apply_boot_power_offsets() {
         for (const PowerTarget& t : power_targets_) {
+            const std::optional<int32_t> tier = tier_offset(t);
+            const int32_t qdb = tier.value_or(t.offset_qdb);
             const bool ok =
-                apply_power_offset && apply_power_offset(t.adapter_idx,
-                                                         t.offset_qdb);
+                apply_power_offset && apply_power_offset(t.adapter_idx, qdb);
             // Say what happened. A safety control that logs an intent it did
             // not achieve is worse than one that logs nothing.
-            wb_logf("power: %s §10.5 boot offset %+d qdb (bound %+d) -> "
-                    "%s\n",
-                    t.name.c_str(), static_cast<int>(t.offset_qdb),
-                    static_cast<int>(t.offset_max_qdb),
+            wb_logf("power: %s %s offset %+d qdb (bound %+d) -> %s\n",
+                    t.name.c_str(), tier ? "§11.7 tier" : "§10.5 boot",
+                    static_cast<int>(qdb), static_cast<int>(t.offset_max_qdb),
                     ok ? "applied" : "NOT APPLIED");
         }
     }
@@ -1474,9 +1514,11 @@ struct TxCore {
         // devourer — the uncharacterised point, and the worst setting on a
         // compressing unit. §11.6 recovery ends here (Pass 48), so this is
         // also what an unattended recovery lands on.
+        // Pass 214: a held curve-less tier is the offset auto returns to.
         for (const PowerTarget& t : power_targets_) {
             if (apply_power_offset) {
-                apply_power_offset(t.adapter_idx, t.offset_qdb);
+                apply_power_offset(t.adapter_idx,
+                                   tier_offset(t).value_or(t.offset_qdb));
             }
         }
         for (PowerAdapter& pa : power_) {
@@ -1632,6 +1674,7 @@ struct TxCore {
     uint16_t negotiated_packet_budget_ = kDefaultMaxPayload;
     // §11.7 remote command state (craft-session-volatile).
     bool cmd_selector_frozen_ = false;
+    std::optional<uint8_t> cmd_profile_pin_;  // §11.7 0x0C PROFILE (Pass 214)
     // §11.7 v2 FPS_SELECT (Pass 71): stats index (1-based, 0 = none this
     // session) and the re-offer target (cleared when the ladder resumes).
     uint8_t cmd_fps_select_ = 0;
@@ -1696,7 +1739,10 @@ struct TxCore {
             for (PowerAdapter& pa : power_) {
                 pa.applied_qdb.reset();  // force a real re-apply
             }
-            if (cmd_selector_frozen_) {
+            if (cmd_profile_pin_) {
+                selector_.set_profile_pin(*cmd_profile_pin_,
+                                          *cmd_profile_pin_);
+            } else if (cmd_selector_frozen_) {
                 const uint8_t pf = selector_.profile_id();
                 selector_.set_profile_pin(pf, pf);
             } else {

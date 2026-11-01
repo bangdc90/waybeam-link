@@ -476,6 +476,43 @@ void test_calibration_refuses_an_mcs_the_ladder_cannot_select() {
 
 }  // namespace
 
+// §11.7 0x0C PROFILE (Pass 214): the over-air select-and-hold of one §3.6
+// profile id. It is the link/profile lever, so SELECTOR run restores the boot
+// envelope after it. An id the table lacks is REJECTED: §9.7 would saturate it
+// to the top rung (Pass 83), a silent wrong MCS.
+void test_profile_command_pins_a_known_id() {
+    wblink::ProfileTable t;
+    for (uint8_t id = 0; id < 5; ++id) {
+        wblink::Profile p;
+        p.id = id;
+        p.mcs = id;
+        p.max_payload = 1424;
+        t.profiles.push_back(p);
+    }
+    Config c = tx_config();
+    c.policy.select.min_profile = 2;
+    c.policy.select.max_profile = 2;
+    TxCore tx(c, 12345, &t, 0xF2);
+    namespace vid = wblink::vcmd_id;
+
+    CHECK(tx.apply_command(vid::kProfile, 0, 1000));
+    CHECK_EQ_U(tx.min_profile(), 0);
+    CHECK_EQ_U(tx.max_profile(), 0);
+    CHECK(tx.apply_command(vid::kProfile, 4, 1000));
+    CHECK_EQ_U(tx.max_profile(), 4);
+    CHECK_EQ_U(tx.boot_min_profile(), 2);   // the restore target is untouched
+
+    TxCore none(c, 12345, nullptr, 0);      // no table: nothing to pin to
+    CHECK(!none.apply_command(vid::kProfile, 0, 1000));
+    t.profiles.pop_back();                  // id 4 gone
+    CHECK(!tx.apply_command(vid::kProfile, 4, 1000));
+    CHECK_EQ_U(tx.max_profile(), 4);        // REJECTED moved nothing
+
+    CHECK(tx.apply_command(vid::kSelector, 0, 1000));  // run
+    CHECK_EQ_U(tx.min_profile(), 2);
+    CHECK_EQ_U(tx.max_profile(), 2);
+}
+
 int main() {
     test_constructs_without_a_profile_table();
     test_s_to_ms_rounds_and_floors();
@@ -489,5 +526,6 @@ int main() {
     test_probe_keeps_measuring_through_a_lockout();
     test_calibration_seam_pins_by_id_not_by_mcs();
     test_calibration_refuses_an_mcs_the_ladder_cannot_select();
+    test_profile_command_pins_a_known_id();
     return wbtest_finish("node_tx_core_test");
 }

@@ -527,6 +527,48 @@ void test_tier_reads_the_backends_own_space() {
     CHECK(mon.power_tier_ceiling().value_or(-1) == 60);
 }
 
+// §11.7 0x0A (Pass 214): on a RELATIVE craft with no actuating curve the tier
+// IS the operating offset. The GK7205 craft runs this way (no curve, no
+// artifact), and before Pass 214 its tier was recorded and moved nothing. The
+// preset may sit above the boot offset, never above power_offset_max_qdb (the
+// load clamp), and it must survive everything that re-asserts power.
+void test_tier_sets_offset_on_curveless_relative_craft() {
+    Config c = one_tx_config(108, {});
+    c.adapters[0].power_offset_qdb = -24;
+    c.adapters[0].power_offset_max_qdb = 0;
+    c.adapters[0].power_offset_presets_qdb = {-72, -48, -24, -12, 0};
+    TxCore tx(c, 1, nullptr, 0);
+    PowerSpy spy;
+    spy.attach(tx);
+    tx.set_backend_relative(true);
+    CHECK(tx.power_tier_effective());       // a list exists and it will bind
+
+    CHECK(tx.set_power_tier(4));            // above the -24 boot offset
+    CHECK(spy.last_qdb() == 0);
+    CHECK(tx.set_power_tier(0));
+    CHECK(spy.last_qdb() == -72);
+    CHECK(spy.absolutes.empty());           // the offset lever, never absolute
+
+    spy.clear();
+    tx.reassert_power();                    // a retune / recovery
+    CHECK(spy.last_qdb() == -72);           // NOT back to the boot -24
+    CHECK(tx.set_power_override(-8));       // a latch is still clamped
+    CHECK(spy.last_qdb() == -72);
+    tx.clear_power_override();              // auto returns to the tier
+    CHECK(spy.last_qdb() == -72);
+
+    // An actuating curve keeps the tier a ceiling: the boot path is untouched.
+    TxCore cal(c, 1, nullptr, 0);
+    PowerSpy cspy;
+    cspy.attach(cal);
+    cal.set_backend_relative(true);
+    cal.install_curve(flat_curve(-16));
+    CHECK(cal.set_power_tier(4));
+    cspy.clear();
+    cal.apply_boot_power_offsets();
+    CHECK(cspy.last_qdb() == -24);
+}
+
 // GROUND TWIN (Pass 165). Pass 151 stated the refusal once and only this
 // craft-side half implemented it; the §15.5 POST /api/v1/tx/power_tier ground
 // path applied the tier anyway, and its absolute ceiling then overwrote the
@@ -858,16 +900,18 @@ void test_uplink_json_matches_effective() {
 void test_vcmd_name_id_roundtrip() {
     for (const char* n : {"selector", "fps_ladder", "fps_select",
                           "resolution", "framing", "mode", "calibrate",
-                          "mtu_tier", "tx_power", "osd_style"}) {
+                          "mtu_tier", "tx_power", "osd_style", "profile"}) {
         const uint8_t id = vcmd_id_for(n);
         CHECK(id != 0);
         CHECK(std::string(vcmd_name_for(id)) == n);
     }
     CHECK_EQ_U(vcmd_id_for("no_such_command"), 0);
     CHECK(std::string(vcmd_name_for(0x7F)).empty());
-    // 0x0A is the Pass 135 assignment, 0x0B Pass 212; 0x0C upward reserved.
+    // 0x0A is the Pass 135 assignment, 0x0B Pass 212, 0x0C Pass 214; 0x0D
+    // upward reserved.
     CHECK_EQ_U(vcmd_id_for("tx_power"), 0x0A);
     CHECK_EQ_U(vcmd_id_for("osd_style"), 0x0B);
+    CHECK_EQ_U(vcmd_id_for("profile"), 0x0C);
 }
 
 // ---- small app-layer helpers ----------------------------------------------
@@ -1158,6 +1202,7 @@ int main() {
     test_artifact_curve_actuates_as_offset();
     test_relative_sweep_stays_inside_the_offset_window();
     test_tier_reads_the_backends_own_space();
+    test_tier_sets_offset_on_curveless_relative_craft();
     test_tier_does_not_narrow_the_relative_sweep_window();
     test_tier_survives_install_curve_and_clamps_the_latch();
     test_empty_offset_window_has_no_sweep();

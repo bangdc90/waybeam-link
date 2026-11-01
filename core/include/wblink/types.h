@@ -74,7 +74,7 @@ inline constexpr uint8_t kKnownMask = kAck | kRejected;
 }  // namespace vcmd_flags
 
 // §11.7 command registry. 0x01 was ARQ — retired Pass 205 and kept reserved
-// (MUST NOT be renumbered). 0x0C–0x1F reserved.
+// (MUST NOT be renumbered). 0x0D–0x1F reserved.
 namespace vcmd_id {
 inline constexpr uint8_t kSelector = 0x02;   // arg 0=run 1=freeze (§9.7 pin)
 inline constexpr uint8_t kFpsLadder = 0x03;  // arg 0=off 1=on (§9.11)
@@ -86,6 +86,7 @@ inline constexpr uint8_t kCalibrate = 0x08;   // arg 0=abort 1=start (§10.6 P12
 inline constexpr uint8_t kMtuTier = 0x09;     // arg 0/1/2 (§9.3a Pass 122)
 inline constexpr uint8_t kTxPower = 0x0A;     // arg = §10.3 preset idx (P135)
 inline constexpr uint8_t kOsdStyle = 0x0B;    // arg = OSD catalog idx (P212)
+inline constexpr uint8_t kProfile = 0x0C;     // arg = §3.6 profile id (P214)
 
 // Typed-only commands have validation/state bookkeeping that the generic
 // §15.5 vehicle-command endpoint cannot safely reproduce.

@@ -11,7 +11,11 @@
       "bus": "",
       "role": "tx",
       "channel": 5805,
-      "bw": 20
+      "bw": 20,
+      "_power_comment": "§10.5 offset space (qdb = 0.25 dB against the chip's efuse table). Boot at -24 (-6 dB, the Pass 150 seed, what this camera always ran at). The ground menu's Camera > TX Power picks a preset over §11.7 0x0A; with no calibrated curve the preset IS the offset (Pass 214), so -18/-12/-6/-3/0 dB. power_offset_max_qdb 0 keeps every preset at or under the chip table. A reboot returns to -24.",
+      "power_offset_qdb": -24,
+      "power_offset_presets_qdb": [-72, -48, -24, -12, 0],
+      "power_offset_max_qdb": 0
     }
   ],
   "streams": [
@@ -36,9 +40,10 @@
     "kind": "radio"
   },
   "policy": {
+    "_select_comment": "Pinned to profile id 1 = MCS2 of the shared MCS1-5 table (hi3536dv100-ground/config/table-mcs1-5.json, id = MCS - 1). The ground menu's Camera > MCS re-pins it over §11.7 0x0C PROFILE (Pass 214); a reboot returns here.",
     "select": {
-      "min_profile": 0,
-      "max_profile": 0
+      "min_profile": 1,
+      "max_profile": 1
     },
     "return": {
       "quiet_gap": true,
