@@ -44,6 +44,11 @@
       "quiet_gap": true,
       "guard_us": 300,
       "return_window_us": 2000
+    },
+    "_csa_comment": "§11 follow-me channel switch, issued by the ground menu. Only allowlisted targets are accepted. persist_channel (Pass 210) boots onto the last committed channel (/etc/waybeam-link/channel.json); delete it to return to adapters[].channel.",
+    "csa": {
+      "channel_allowlist": [5745, 5765, 5785, 5805, 5825],
+      "persist_channel": true
     }
   },
   "venc": {

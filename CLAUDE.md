@@ -18,6 +18,24 @@ no longer keeps its own — `ROADMAP.md` is a pointer stub), and the port regist
 is **not** a coordination `protocols/` file, and the over-air wire format is
 settled here, not there.
 
+## Current target: GK7205V200 camera + Hi3536DV100 ground
+
+All work now is for **one pair**: the GK7205V200 + IMX307 camera (`tx`,
+RTL8812AU via devourer, frame-shm ring from waybeam) and the Hi3536DV100
+ground (`rx`, two RTL8812AU, `waybeam-vdec`). Branch
+`impl/gk7205-hi3536-fpv`. Focus on them:
+
+- Build `gk7205v200-au` (camera) and `hi3536dv100-au` (ground); skip other
+  boards, NICs and examples unless asked. Device IPs and `sshpass` access are
+  in `../CLAUDE.md`. Both kernels tick at 10 ms, so a microsecond delay costs
+  10 ms unless it is on a spin path (see `docs/findings.md`, 2026-11-01).
+- This does **not** relax the process below: PROTOCOL.md tiers, spec
+  amendment first, a numbered Pass for each ruling, feature branch only,
+  never edit `third_party/`, register new config keys in
+  `io/src/config_registry.cpp`, and keep tests green before committing.
+- Boot-time work (camera and ground init scripts, shareable script): see
+  `docs/boot-time.md`.
+
 ## The law
 
 `PROTOCOL.md` v1 is LAW — but the law has two tiers, and applying tier 1 to
