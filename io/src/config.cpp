@@ -1311,6 +1311,13 @@ Result<Config> load_config_json(const std::string& json_text) {
             }
         }
 
+        // §15.2 Pass 212: on-camera OSD service for §11.7 0x0B OSD_STYLE.
+        if (j.contains("osd")) {
+            const json& v = j.at("osd");
+            cfg.osd.catalog_dir = v.value("catalog_dir", cfg.osd.catalog_dir);
+            cfg.osd.apply_cmd = v.value("apply_cmd", cfg.osd.apply_cmd);
+        }
+
         // air ("udp" = dev backend, not §15; "radio" = devourer, §3.0 —
         // radio adapters come from the top-level adapters array)
         if (j.contains("air")) {

@@ -56,6 +56,11 @@
     "enabled": false,
     "recovery_enabled": false
   },
+  "_osd_comment": "§11.7 0x0B OSD_STYLE (Pass 212): the ground menu picks a style by index into the name-sorted fonts/*.png catalog (0xFE/0xFF = OSD on/off); the link forks apply_cmd with the style name, @on or @off. waybeam/deploy-gk7205.sh installs both.",
+  "osd": {
+    "catalog_dir": "/etc/waybeam-osd/fonts",
+    "apply_cmd": "/usr/bin/waybeam-osd-apply"
+  },
   "control": { "bind": "127.0.0.1:8091" },
   "stats": {
     "hz": 0,

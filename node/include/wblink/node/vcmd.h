@@ -31,6 +31,7 @@ inline uint8_t vcmd_id_for(const std::string& name) {
     if (name == "calibrate") return vcmd_id::kCalibrate;  // §10.6 Pass 120
     if (name == "mtu_tier") return vcmd_id::kMtuTier;  // §9.3a Pass 122
     if (name == "tx_power") return vcmd_id::kTxPower;  // §10.3 Pass 135
+    if (name == "osd_style") return vcmd_id::kOsdStyle;  // §11.7 Pass 212
     return 0;
 }
 
@@ -45,6 +46,7 @@ inline const char* vcmd_name_for(uint8_t id) {
         case vcmd_id::kCalibrate: return "calibrate";  // §10.6 Pass 120
         case vcmd_id::kMtuTier: return "mtu_tier";  // §9.3a Pass 122
         case vcmd_id::kTxPower: return "tx_power";  // §10.3 Pass 135
+        case vcmd_id::kOsdStyle: return "osd_style";  // §11.7 Pass 212
     }
     return "";
 }

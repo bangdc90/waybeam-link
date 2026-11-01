@@ -106,6 +106,7 @@ if(WBLINK_VENC)
     add_wb_test(venc_actuator_test wblink_io)
 endif()
 add_wb_test(modes_test wblink_io)
+add_wb_test(osd_styles_test wblink_io)
 # modes_test parses the catalog JSON to verify sort order + fields; give it the
 # vendored nlohmann header (wblink_io keeps its third_party include PRIVATE).
 target_include_directories(modes_test SYSTEM PRIVATE

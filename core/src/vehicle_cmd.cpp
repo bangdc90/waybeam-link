@@ -135,7 +135,7 @@ bool VcmdIssuer::set_psk(std::vector<uint8_t> psk) {
 bool VcmdIssuer::start(const CommonPrefix& prefix, uint16_t target_originator,
                        uint8_t cmd_id, uint8_t cmd_arg, uint64_t now_us) {
     if (active() || policy_.psk.empty() || target_originator == 0 ||
-        !vcmd_arg_in_wire_range(cmd_id, cmd_arg)) {  // §3.14/P105 MODE exception
+        !vcmd_arg_in_wire_range(cmd_id, cmd_arg)) {  // §3.14 P105/P212 full-u8 exception
         return false;
     }
     // §11.7: pace starts by min_interval + copy_interval so a fresh

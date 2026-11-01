@@ -74,7 +74,7 @@ inline constexpr uint8_t kKnownMask = kAck | kRejected;
 }  // namespace vcmd_flags
 
 // §11.7 command registry. 0x01 was ARQ — retired Pass 205 and kept reserved
-// (MUST NOT be renumbered). 0x0B–0x1F reserved.
+// (MUST NOT be renumbered). 0x0C–0x1F reserved.
 namespace vcmd_id {
 inline constexpr uint8_t kSelector = 0x02;   // arg 0=run 1=freeze (§9.7 pin)
 inline constexpr uint8_t kFpsLadder = 0x03;  // arg 0=off 1=on (§9.11)
@@ -85,6 +85,7 @@ inline constexpr uint8_t kMode = 0x07;        // arg = §15.5 catalog index (P10
 inline constexpr uint8_t kCalibrate = 0x08;   // arg 0=abort 1=start (§10.6 P120)
 inline constexpr uint8_t kMtuTier = 0x09;     // arg 0/1/2 (§9.3a Pass 122)
 inline constexpr uint8_t kTxPower = 0x0A;     // arg = §10.3 preset idx (P135)
+inline constexpr uint8_t kOsdStyle = 0x0B;    // arg = OSD catalog idx (P212)
 
 // Typed-only commands have validation/state bookkeeping that the generic
 // §15.5 vehicle-command endpoint cannot safely reproduce.
@@ -93,13 +94,22 @@ inline constexpr bool typed_endpoint_only(uint8_t id) {
 }
 }  // namespace vcmd_id
 
+// §11.7 0x0B OSD_STYLE (Pass 212): catalog indices stop below kOsdStyleMax;
+// the top two byte values switch the OSD on/off.
+inline constexpr uint8_t kOsdStyleMax = 64;
+inline constexpr uint8_t kOsdStyleOn = 0xFE;
+inline constexpr uint8_t kOsdStyleOff = 0xFF;
+
 // §3.14 — every command is enable/disable or a ≤5-choice enum (Pass 68), EXCEPT
-// 0x07 MODE, whose arg indexes the open-ended §15.5 catalog and rides the full
-// u8 (Pass 105). The structural cap below is thus cmd_id-dependent: it gates
-// every command but MODE. Helper keeps the exception in one place.
+// 0x07 MODE (Pass 105) and 0x0B OSD_STYLE (Pass 212), whose args index
+// open-ended catalogs and ride the full u8. The structural cap below is thus
+// cmd_id-dependent. Helper keeps the exception in one place.
 inline constexpr uint8_t kVcmdMaxArg = 4;
+inline constexpr bool vcmd_arg_full_u8(uint8_t cmd_id) {
+    return cmd_id == vcmd_id::kMode || cmd_id == vcmd_id::kOsdStyle;
+}
 inline constexpr bool vcmd_arg_in_wire_range(uint8_t cmd_id, uint8_t cmd_arg) {
-    return cmd_id == vcmd_id::kMode || cmd_arg <= kVcmdMaxArg;
+    return vcmd_arg_full_u8(cmd_id) || cmd_arg <= kVcmdMaxArg;
 }
 
 // Exact wire sizes (§3.1–3.8, §11.1).

@@ -81,7 +81,9 @@ enum {
 /*
  * Apply an operating mode by name. `cmd` is the configured applier
  * (`venc.mode_apply_cmd`) and `name` a charset-validated mode name. Return
- * NONZERO if the apply was started, zero if it could not be.
+ * NONZERO if the apply was started, zero if it could not be. The same callback
+ * also launches the §11.7 0x0B OSD_STYLE applier (Pass 212): then `cmd` is
+ * `osd.apply_cmd` and `name` a style name, `@on` or `@off`.
  *
  * Called SYNCHRONOUSLY from the flight loop, so it MUST NOT BLOCK — applying a
  * mode restarts venc, which takes seconds. `app/main.cpp`'s implementation

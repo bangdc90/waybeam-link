@@ -1660,11 +1660,11 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                     "{\"ok\":false,\"error\":\"ground uplink "
                     "calibration is running\"}"};
         }
-        // §11.7/§3.14: MODE (Pass 105) rides the full u8 — the catalog
-        // lives on the craft, so an over-range index is the craft's
-        // REJECTED to give, not a local 400. Every other command is
-        // capped at 0..4 (Pass 68).
-        const int arg_max = (id == vcmd_id::kMode) ? 255 : kVcmdMaxArg;
+        // §11.7/§3.14: MODE (Pass 105) and OSD_STYLE (Pass 212) ride the
+        // full u8 — the catalog lives on the craft, so an over-range index
+        // is the craft's REJECTED to give, not a local 400. Every other
+        // command is capped at 0..4 (Pass 68).
+        const int arg_max = vcmd_arg_full_u8(id) ? 255 : kVcmdMaxArg;
         if (arg < 0 || arg > arg_max) {
             return {400,
                     "{\"ok\":false,\"error\":\"arg out of range\"}"};

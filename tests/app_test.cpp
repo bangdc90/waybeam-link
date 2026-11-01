@@ -858,15 +858,16 @@ void test_uplink_json_matches_effective() {
 void test_vcmd_name_id_roundtrip() {
     for (const char* n : {"selector", "fps_ladder", "fps_select",
                           "resolution", "framing", "mode", "calibrate",
-                          "mtu_tier", "tx_power"}) {
+                          "mtu_tier", "tx_power", "osd_style"}) {
         const uint8_t id = vcmd_id_for(n);
         CHECK(id != 0);
         CHECK(std::string(vcmd_name_for(id)) == n);
     }
     CHECK_EQ_U(vcmd_id_for("no_such_command"), 0);
     CHECK(std::string(vcmd_name_for(0x7F)).empty());
-    // 0x0A is the Pass 135 assignment; the registry reserves 0x0B upward.
+    // 0x0A is the Pass 135 assignment, 0x0B Pass 212; 0x0C upward reserved.
     CHECK_EQ_U(vcmd_id_for("tx_power"), 0x0A);
+    CHECK_EQ_U(vcmd_id_for("osd_style"), 0x0B);
 }
 
 // ---- small app-layer helpers ----------------------------------------------

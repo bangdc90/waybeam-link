@@ -429,11 +429,13 @@ int main() {
         // §3.14/Pass 105: 0x07 MODE widens the structural cap to the full u8 —
         // a catalog index of 5..255 round-trips, while the SAME arg on any
         // other command stays a structural error (the cmd_id-dependent gate).
+        // Pass 212: 0x0B OSD_STYLE widens it the same way.
+        for (const uint8_t wide_id : {vcmd_id::kMode, vcmd_id::kOsdStyle})
         for (const uint8_t arg : {uint8_t{5}, uint8_t{9}, uint8_t{255}}) {
             VehicleCmd c;
             c.prefix = random_prefix(rng);
             c.cmd_nonce = rng.u32();
-            c.cmd_id = vcmd_id::kMode;
+            c.cmd_id = wide_id;
             c.cmd_arg = arg;
             c.cmd_mac = rng.u32();
             const size_t n = encode_vehicle_cmd(c, buf, sizeof(buf));
@@ -446,7 +448,7 @@ int main() {
             // decode (flip only cmd_id on the encoded MODE frame).
             c.cmd_id = vcmd_id::kFpsSelect;
             CHECK_EQ_U(encode_vehicle_cmd(c, buf, sizeof(buf)), 0);
-            c.cmd_id = vcmd_id::kMode;
+            c.cmd_id = wide_id;
             CHECK_EQ_U(encode_vehicle_cmd(c, buf, sizeof(buf)), kVehicleCmdSize);
             buf[17] = vcmd_id::kFpsSelect;  // cmd_id on the wire
             const Decoded bad = decode(buf, kVehicleCmdSize);

@@ -299,6 +299,7 @@ struct VehicleCmd {
     uint8_t cmd_id = 0;
     uint8_t cmd_arg = 0;    // 0..kVcmdMaxArg (§3.14 Pass 68); full u8 for
                             // cmd_id kMode (§15.5 catalog index, Pass 105)
+                            // and kOsdStyle (Pass 212)
     uint32_t cmd_mac = 0;
     friend bool operator==(const VehicleCmd&, const VehicleCmd&) = default;
 };

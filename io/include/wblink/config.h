@@ -262,6 +262,13 @@ struct VencCfg {
     std::string modes_dir;
 };
 
+// §15.2 Pass 212: the on-camera OSD service §11.7 0x0B OSD_STYLE drives.
+// Either string empty = no OSD on this craft, and 0x0B is REJECTED.
+struct OsdCfg {
+    std::string catalog_dir;  // e.g. "/etc/waybeam-osd/fonts" (<name>.png)
+    std::string apply_cmd;    // e.g. "/usr/bin/waybeam-osd-apply", one argv
+};
+
 // §6 RX-side knobs (all §17-overridable seeds).
 struct RxCfgPolicy {
     uint32_t stall_timeout_ms = 200;   // §6.5
@@ -624,6 +631,7 @@ struct Config {
     ScoutCfg scout;        // §15.5a ground scout (channel searcher)
     CacheCfg cache;        // §14.3 cache repair/store (off by default)
     VencCfg venc;          // §9.6 encoder actuation
+    OsdCfg osd;            // §11.7 0x0B on-camera OSD (Pass 212)
     AirCfg air;            // dev backend; empty until devourer lands
     LoopbackCfg loopback;  // loopback-mode loss injection
 

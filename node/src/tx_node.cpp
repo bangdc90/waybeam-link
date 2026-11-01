@@ -80,6 +80,7 @@
 #include "wblink/video_slot_cadence.h"
 
 #include "wblink/modes.h"
+#include "wblink/osd_styles.h"
 
 #include "wblink/node/aim.h"
 #include "wblink/node/air_backend.h"
@@ -478,6 +479,25 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
             active_mode = name;  // optimistic; the applier is authoritative
             wb_logf("vcmd: MODE[%u] -> %s (applier %s)\n", arg,
                     name.c_str(), l.cfg.venc.mode_apply_cmd.c_str());
+            return true;
+        }
+        if (id == vcmd_id::kOsdStyle) {
+            // §11.7 0x0B OSD_STYLE (Pass 212): arg indexes the OSD service's
+            // name-sorted font catalog (0xFE/0xFF = on/off). Fork its applier
+            // through the same detached spawner MODE uses; the service owns
+            // persistence, so the link records nothing. REJECTED on a craft
+            // without both osd keys, or an index past the catalog.
+            if (l.cfg.osd.apply_cmd.empty() || l.cfg.osd.catalog_dir.empty()) {
+                return false;
+            }
+            const std::string target =
+                osd_style_apply_arg(l.cfg.osd.catalog_dir, arg);
+            if (target.empty()) return false;
+            if (!(mode_apply && mode_apply(l.cfg.osd.apply_cmd, target))) {
+                return false;
+            }
+            wb_logf("vcmd: OSD_STYLE[%u] -> %s (applier %s)\n", arg,
+                    target.c_str(), l.cfg.osd.apply_cmd.c_str());
             return true;
         }
         return tx.apply_command(id, arg, now_ms());

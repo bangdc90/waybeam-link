@@ -487,9 +487,9 @@ Decoded decode_vehicle_cmd(const uint8_t* buf, size_t len) {
     c.cmd_arg = buf[18];
     c.cmd_mac = be32_read(buf + 19);
     // §3.14: cmd_arg is structurally 0..4 (Pass 68) for every command but 0x07
-    // MODE, whose arg indexes the open-ended §15.5 catalog and rides the full
-    // u8 (Pass 105). An unknown cmd_id is NOT a decode error — the §11.7 craft
-    // engine answers it with REJECTED.
+    // MODE and 0x0B OSD_STYLE, whose args index open-ended catalogs and ride
+    // the full u8 (Pass 105, Pass 212). An unknown cmd_id is NOT a decode
+    // error — the §11.7 craft engine answers it with REJECTED.
     if (!vcmd_arg_in_wire_range(c.cmd_id, c.cmd_arg)) {
         return DecodeError::kInvalidField;
     }

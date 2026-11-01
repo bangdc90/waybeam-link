@@ -248,6 +248,13 @@ int main() {
                                vcmd_id::kFpsSelect, 9, now));
             CHECK(modei.start({kGround, 0, kGroundSession}, kCraftOrig,
                               vcmd_id::kMode, 9, now));
+            // Pass 212: OSD_STYLE takes the full u8 too (0xFF = OSD off).
+            VcmdIssuer osdi(pol);
+            CHECK(osdi.start({kGround, 0, kGroundSession}, kCraftOrig,
+                             vcmd_id::kOsdStyle, kOsdStyleOff, now));
+            VcmdIssuer txpi(pol);
+            CHECK(!txpi.start({kGround, 0, kGroundSession}, kCraftOrig,
+                              vcmd_id::kTxPower, kOsdStyleOff, now));
         }
 
         CHECK(issuer.start({kGround, 0, kGroundSession}, kCraftOrig,

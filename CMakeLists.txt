@@ -405,7 +405,8 @@ add_library(wblink_io STATIC
     io/src/scout_sense.cpp
     io/src/scout_store.cpp
     io/src/uplink_calib_store.cpp
-    io/src/modes.cpp)
+    io/src/modes.cpp
+    io/src/osd_styles.cpp)
 target_include_directories(wblink_io PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/io/include>)
 target_compile_features(wblink_io PUBLIC cxx_std_20)
