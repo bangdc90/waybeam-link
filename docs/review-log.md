@@ -24,6 +24,36 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 212 — §11.7 `0x0B` OSD_STYLE; §3.14 full-u8 arg; §15.2 `osd.*` (2026-11-01)
+
+Operator ruling 2026-11-01 (on-camera OSD plan, waybeam
+`documentation/ONCAM_OSD_PLAN.md`, "User decisions" + §Over the air): the
+ground menu changes the camera's OSD style in flight with the same flow as the
+channel switch — unmute TX with auto-mute, send a command, the camera applies
+it, TX mutes again. The style catalog is the camera's font directory.
+
+Ruled:
+
+1. §11.7 — new command `0x0B` OSD_STYLE. `arg` 0..N-1 indexes the name-sorted
+   catalog under `osd.catalog_dir` (`<name>.png`, name 1..63 of
+   `[A-Za-z0-9_-]`, regular files, `strcmp` order, at most 64 — the waybeam-osd
+   T6 rule); `0xFE` = OSD on, `0xFF` = OSD off.
+2. §3.14 — `cmd_arg` for `0x0B` decodes over the full u8, like MODE (Pass 105).
+   The gate stays `cmd_id`-dependent; `0x0C`–`0x1F` stay reserved.
+3. The craft forks `osd.apply_cmd` detached with one argv: the style name, or
+   `@on`/`@off` (outside the name charset, so they cannot collide). REJECTED
+   when either `osd` key is empty, `arg` is `0x40`..`0xFD`, or past the catalog.
+4. §15.2 — `osd.catalog_dir`, `osd.apply_cmd` (strings, default empty).
+5. §15.5 — `POST /api/v1/vehicle/command` takes `"osd_style"` with `arg`
+   0..255 (the range check is the craft's, as for `"mode"`).
+
+The link keeps no OSD state: the OSD service persists the style, and an ACK
+means the applier was launched.
+
+**Evidence.** `tests/vehicle_cmd_test.cpp`, `tests/wire_roundtrip_test.cpp`
+(full-u8 gate for 0x0B, still capped for others), `tests/osd_styles_test.cpp`
+(catalog order and filters, sentinels), device check from the ground REST.
+
 ## Pass 211 — §3.16 two-way window restarts after a mute; §15.2/§15.5 auto-mute re-arm (2026-11-01)
 
 Operator report 2026-11-01: after a channel switch from the ground menu the
