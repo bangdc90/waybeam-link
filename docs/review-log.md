@@ -24,6 +24,43 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 213 — §15.4 VencFrameMeta v3: `frame_seq` + `stream_epoch`, ring v3; RX flag bit 4 FEC-repaired (2026-11-01)
+
+Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.1,
+chosen from three options: 16-byte meta + ring v3 / flag-bit variable meta /
+link `block_id` only). The ground decoder inferred frame loss from a PTS gap
+alone and waited for the next keyframe, so a frame the camera never encoded
+froze the picture up to one GOP. It needs an explicit, camera-made frame
+identity that survives fragmentation, FEC, dedup and reassembly.
+
+Ruled:
+
+1. §15.4 — `VencFrameMeta` is 16 bytes: offsets 0–7 unchanged, `frame_seq` u32
+   at 8, `stream_epoch` u32 at 12, Annex-B at 16. Ring header `version` 3;
+   `attach()` refuses v2, so a same-host mismatch is loud. Camera producer,
+   camera link, ground link and ground consumer update together; there is no
+   mixed-version air interop (an old RX would pass the prefix as Annex-B).
+2. `frame_seq` +1 per encoded access unit, including producer drops; mod 2^32,
+   serial-number compare. `stream_epoch` random per producer ring, never 0; a
+   new epoch is a restart, not a loss. 0 = sequence unknown.
+3. §6.3b synthesized meta (chunk 0 lost) carries `frame_seq` = `stream_epoch` =
+   0. A real chunk 0 keeps its sequence.
+4. §6.3a outcome 3 (FEC decode) sets `flags` bit 4 FEC-repaired; the
+   byte-identical rule now excepts that bit. Encoders never set it.
+5. waybeam-link reads neither new field: TX, air and RX only copy them. The
+   graded recovery that uses them is the ground consumer's (hi3536dv100-ground
+   `RecoveryGate`), not link behaviour.
+6. A frame-shm ingress (re)attach skips slots with `pts` older than 200 ms
+   (`FrameShmRing::drop_stale`). Found on hardware: a restarted camera link
+   sent ~11 s old queued frames with contiguous `frame_seq`.
+
+Not changed: DATA header, `block_id`, §14 FEC, §3.9 RECOVERY_REQUEST.
+
+**Evidence.** `tests/frame_reassembler_test.cpp` (bit 4 on the FEC path only),
+`tests/spatial_repair_test.cpp` (synthesized meta sequence 0,
+`conceal_missing`), ring v3 and `drop_stale` in `tests/frame_shm_test.cpp`; producer side in waybeam
+`tests/test_venc_frame_ring.c` (sequence across drops).
+
 ## Pass 212 — §11.7 `0x0B` OSD_STYLE; §3.14 full-u8 arg; §15.2 `osd.*` (2026-11-01)
 
 Operator ruling 2026-11-01 (on-camera OSD plan, waybeam

@@ -1469,7 +1469,7 @@ a whole frame (up to 512 KB) and `FrameFramer` (§5.1a) *is* the fragmenter.
 
 ### 5.1a FrameFramer (per `frame-shm` stream)
 Replaces §5.1's Framer when the ingress binding kind is `frame-shm` (§15.4).
-The ingress unit is one whole encoded frame carrying an 8-byte `VencFrameMeta`
+The ingress unit is one whole encoded frame carrying a 16-byte `VencFrameMeta`
 prefix (§15.4); the `[VencFrameMeta][Annex-B]` blob is treated as an **opaque
 payload** — FrameFramer parses only the metadata prefix, never the NAL bytes.
 
@@ -1572,14 +1572,16 @@ frames instead of forwarding per-packet payloads:
    `seq` order → the `[VencFrameMeta][Annex-B]` blob → write one SHM slot. No
    FEC decode.
 3. **Sources missing but ≥ `k` total** (source + repair): GF(256) decode (§14.1)
-   recovers the missing source symbols, trim to `frame_len`, then egress.
+   recovers the missing source symbols, trim to `frame_len`, set §15.4
+   `flags` bit 4 (FEC-repaired, Pass 213), then egress.
 4. **< `k` after deadline / on supersession (§6.2):** frame lost, **nothing is
    egressed** — a *partial* frame is useless to the decoder (no partial slots).
    When the stream enables §6.3b spatial salvage, this outcome first attempts
    slice-level concealment; only a frame §6.3b cannot repair is lost.
 5. The egressed slot is **byte-identical** to the producer's original slot
    (§15.4) — the metadata prefix rides through transparently; the RX never
-   parses the Annex-B payload. Exception: a §6.3b-repaired frame is a
+   parses the Annex-B payload. Exceptions: the outcome-3 `flags` bit 4, and a
+   §6.3b-repaired frame is a
    *reconstructed* slot — surviving slices byte-identical, erased slices
    replaced — and is the one egress that is not the producer's bytes.
 6. Successful fast/FEC completion marks the block packet-complete in the merged
@@ -1657,7 +1659,9 @@ producer emits multiple independent slice segments per picture, §15.4):
    intentionally malformed data.
 5. The rebuilt access unit egresses through the normal §6.3a slot write with
    the original `VencFrameMeta` when chunk 0 survived, else a synthesized meta
-   (`codec` H.265, inherited flags cleared except GDR, PTS extrapolated).
+   (`codec` H.265, inherited flags cleared except GDR, PTS extrapolated,
+   `frame_seq` = `stream_epoch` = 0: the sequence of a frame whose chunk 0 was
+   lost is not known, and a guessed one could read as a duplicate).
    **Either way the emitted meta carries `flags` bit 3 (salvaged, §15.4)** —
    it is stamped last, after any synthesis, so a rebuilt prefix announces
    itself exactly as a surviving one does. Ordering: a salvaged frame
@@ -2803,7 +2807,7 @@ spans are deferred.
   v1 never commands above `preferred`. On start the ladder commands `preferred`
   once (aligning the encoder to the envelope).
 - **Measurement:** each non-IDR frame at frame-SHM ingress contributes its
-  Annex-B payload bytes (the 8-byte `VencFrameMeta` prefix is excluded) to a
+  Annex-B payload bytes (the `VencFrameMeta` prefix is excluded) to a
   fixed EWMA. IDRs are excluded because their deliberately larger size would
   falsely prove that the steady P-frame block is healthy.
 - **Reduce** (toward `min`) when the measured P-frame EWMA remains below
@@ -6340,12 +6344,13 @@ shared-memory ring produced by the waybeam encoder (`waybeam_venc`
 `venc_frame_ring`, canonical header `waybeam_venc/include/venc_frame_ring.h`).
 One slot = one whole encoded frame. waybeam-link treats a slot's payload as
 **opaque** (§1 "RTP is opaque on the wire"): it fragments/reassembles the bytes
-and reads only the 8-byte metadata prefix.
+and reads only the 16-byte metadata prefix.
 
 **Ring:** POSIX SHM object `/<bind.name>` (default `venc_frame`). Producer-owned
 (creates `O_EXCL`, `shm_unlink`s stale + on teardown). SPSC (single producer,
 single consumer), lock-free, futex consumer-wake. Header magic `0x5646524D`
-("VFRM"), **version 2** (see the offset-88 note below); default geometry 16
+("VFRM"), **version 3** (v3 = the 16-byte `VencFrameMeta` below, Pass 213;
+see the offset-88 note for v2); default geometry 16
 slots × 512 KB (~8 MB) for a waybeam-link egress producer — a venc producer
 creates 8 slots. Free-running
 `write_idx`/`read_idx`; on a full ring the producer **drops and keeps running**
@@ -6381,17 +6386,43 @@ are consumed without observing empty, the ring remains pending for the next
 iteration; the bound prevents a producer burst monopolising the vehicle loop
 while removing the old one-frame throughput ceiling.
 
-**Slot payload** = 8-byte `VencFrameMeta` prefix + Annex-B frame bytes (NAL start
-codes preserved):
+**Slot payload** = 16-byte `VencFrameMeta` prefix + Annex-B frame bytes (NAL start
+codes preserved). Ring v2 had an 8-byte prefix (offsets 0–7 below, Annex-B at
+8); v3 appends `frame_seq` and `stream_epoch` (Pass 213):
 
 | off | size | field | notes |
 |---|---|---|---|
 | 0 | 4 | `pts` | u32; encoder capture timestamp (SDK units), truncated |
 | 4 | 1 | `codec` | u8; `0x01` = H.265 (only value emitted) |
-| 5 | 1 | `flags` | u8; bit 0 = IDR, bit 1 = GDR active, bit 2 = SVC-T enhancement layer, bit 3 = **salvaged** (§6.3b, set by RX — see below); other bits reserved 0 |
+| 5 | 1 | `flags` | u8; bit 0 = IDR, bit 1 = GDR active, bit 2 = SVC-T enhancement layer, bit 3 = **salvaged** (§6.3b, set by RX — see below), bit 4 = **FEC-repaired** (§6.3a, set by RX — see below); other bits reserved 0 |
 | 6 | 1 | `gdr_pos` | u8; zero-based GDR cycle position, 0 when inactive |
 | 7 | 1 | `gdr_len` | u8; GDR cycle length, 0 when inactive; when active `gdr_pos < gdr_len` |
-| 8 | N | frame | raw Annex-B (start codes + NAL units) |
+| 8 | 4 | `frame_seq` | u32; producer frame sequence, see below |
+| 12 | 4 | `stream_epoch` | u32; producer stream epoch, never 0 from a producer; 0 = sequence unknown |
+| 16 | N | frame | raw Annex-B (start codes + NAL units) |
+
+**`frame_seq` / `stream_epoch` (Pass 213).** The producer advances `frame_seq`
+by one for every encoded access unit it takes from the encoder, **including one
+it then drops** (full ring, oversize, unbuildable — the `full_drops` /
+`other_drops` frames), so a consumer that sees a gap knows encoded frames are
+missing, and one that sees none knows the reference chain is whole even when the
+PTS step is large (a frame the camera never encoded is not a loss). It wraps
+mod 2^32; compare with serial-number arithmetic (signed 32-bit difference).
+`stream_epoch` is drawn once per producer ring (random, never 0) and names the
+sequence space: a new epoch is a restart, not a loss, whatever the two sequence
+values are. `frame_seq` restarts at 0 with each epoch. Both ride the opaque
+payload like the rest of the prefix, so a TX node, the air, FEC, diversity dedup
+and §6.3a reassembly carry them untouched and no DATA-header field is added. A
+blob whose chunk 0 was lost carries no sequence (§6.3b synthesized meta, both
+fields 0); a consumer treats `stream_epoch` 0 as "sequence unknown" and leaves
+its sequence tracking as it was. waybeam-link itself only copies these bytes.
+
+**Stale backlog on attach (Pass 213).** A frame-shm ingress that (re)attaches
+first skips queued slots whose `pts` is more than 200 ms before its own
+CLOCK_MONOTONIC (same host, the §3.16 domain): frames the producer queued while
+no TX read the ring are old video, and since their `frame_seq` is contiguous a
+receiver could not tell them from live frames. Fresh slots, such as the first
+IDR after a producer start, are kept.
 
 The whole `[VencFrameMeta][Annex-B]` blob is the FrameFramer source-blob (§5.1a);
 on egress (§6.3a) the reassembled blob is written back byte-identical. The
@@ -6417,6 +6448,13 @@ clear, so a consumer fails safe by treating absence as today's behaviour.
 The bit rides the same payload prefix as the rest of the metadata, so it reaches
 a ring consumer and a §15.4 `FrameSink` C-ABI consumer identically, with no
 change to either interface.
+
+**`flags` bit 4 — FEC-repaired (RX-set, Pass 213).** Set by §6.3a on a blob
+completed by the GF(256) decode (outcome 2) rather than from all `k` sources.
+The Annex-B bytes are what was sent; only this bit differs. It tells a consumer
+that symbols were lost on the air and FEC repaired them — packet loss that is
+**not** frame loss and must not start any recovery. Like bit 3 it is never
+written by an encoder, and absence is not evidence of a clean air path.
 
 **In-process acceptance callback.** The C++ `FrameSink` and the additive C ABI
 acknowledgement callback return whether the synchronous consumer accepted the
