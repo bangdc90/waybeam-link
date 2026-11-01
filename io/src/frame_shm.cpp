@@ -342,6 +342,36 @@ bool FrameShmRing::write_frame(const uint8_t* data, size_t len) {
     return true;
 }
 
+// ---- drop_stale (consumer, owning thread only) ----------------------------
+
+uint64_t FrameShmRing::drop_stale(uint32_t now_pts, uint32_t max_age_us) {
+    uint8_t* b = map_;
+    const uint64_t w = atomic_load_u64(b, kFrHdrWriteIdx, __ATOMIC_ACQUIRE);
+    uint64_t r = atomic_load_u64(b, kFrHdrReadIdx, __ATOMIC_RELAXED);
+    uint64_t dropped = 0;
+    while (r != w) {
+        const size_t slot = static_cast<size_t>(r & (slot_count_ - 1));
+        const uint8_t* p = b + kFrameRingHeaderSize + slot * slot_stride_;
+        uint32_t len;
+        std::memcpy(&len, p, sizeof(len));
+        if (len < kVencFrameMetaSize || len > slot_data_size_) {
+            break;  // read_frame() judges a bad slot
+        }
+        uint32_t pts;
+        std::memcpy(&pts, p + kFrameSlotLenPrefix, sizeof(pts));
+        if (static_cast<int32_t>(now_pts - pts) <=
+            static_cast<int32_t>(max_age_us)) {
+            break;
+        }
+        ++r;
+        ++dropped;
+    }
+    if (dropped != 0) {
+        atomic_store_u64(b, kFrHdrReadIdx, r, __ATOMIC_RELEASE);
+    }
+    return dropped;
+}
+
 // ---- read_frame (consumer, owning thread only) ----------------------------
 
 long FrameShmRing::read_frame(uint8_t* buf, size_t cap) {

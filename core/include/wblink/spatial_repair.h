@@ -17,6 +17,7 @@
 #include <map>
 #include <vector>
 
+#include "wblink/frame_shm_format.h"
 #include "wblink/hevc_conceal.h"
 
 namespace wblink {
@@ -53,6 +54,20 @@ class SpatialRepair {
                 const std::map<uint16_t, std::vector<uint8_t>>& sources,
                 const Emit& emit);
 
+    // §6.3b whole-frame freeze for a frame that never arrived at all: emit
+    // the next picture (POC + 1) as all-skip slices that copy the last one
+    // learned, with a "sequence unknown" salvaged meta. For a consumer that
+    // sees a §15.4 frame_seq gap (hi3536dv100-ground, whose VDEC drops every
+    // P frame after a missing reference). Same refusals as repair()'s freeze.
+    bool conceal_missing(const Emit& emit);
+    // Whether `missing` conceal_missing() stand-ins (POC + 1 each) would let
+    // `blob` continue the learned chain: its first slice is a non-IRAP slice
+    // at POC last + missing + 1. False when the POC restarted (an IRAP was in
+    // the gap: no stand-in can replace it) or the frame does not parse.
+    bool conceal_fits(const uint8_t* blob, size_t len, uint32_t missing) const;
+    // log2_max_pic_order_cnt_lsb of the learned SPS, 0 before one is seen
+    // (the POC check above cannot tell a restart that lands on a wrap).
+    uint32_t poc_lsb_bits() const { return have_sps_ ? sps_.log2_max_poc_lsb : 0; }
     const SpatialRepairStats& stats() const { return stats_; }
     bool geometry_known() const { return !geometry_.empty(); }
 
@@ -104,7 +119,7 @@ class SpatialRepair {
     bool rps_stable_ = false;
     uint32_t last_poc_ = 0;
     bool have_poc_ = false;
-    uint8_t meta_template_[8] = {0};   // last delivered VencFrameMeta
+    uint8_t meta_template_[kVencFrameMetaSize] = {0};  // last delivered VencFrameMeta
     bool have_meta_ = false;
     uint32_t last_pts_ = 0;
     uint32_t pts_delta_ = 0;

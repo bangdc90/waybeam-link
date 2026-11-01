@@ -26,6 +26,7 @@ const char* kFull = "/wblink-frame-shm-test-full";
 const char* kOversize = "/wblink-frame-shm-test-oversize";
 const char* kEvent = "/wblink-frame-shm-test-event";
 const char* kMissing = "/wblink-frame-shm-test-missing";
+const char* kStale = "/wblink-frame-shm-test-stale";
 const char* kRestart = "/wblink-frame-shm-test-restart";
 const char* kPermissions = "/wblink-frame-shm-test-permissions";
 const char* kHealth = "/wblink-frame-shm-test-health";
@@ -76,7 +77,10 @@ int main() {
     // move with it -- a same-layout, opposite-polarity field is the one change
     // an offset-addressing consumer cannot detect for itself.
     CHECK_EQ_U(kFrameRingHeaderSize, 192);
-    CHECK_EQ_U(kFrameRingVersion, 2);
+    // v3 (Pass 213) changed no header offset either: the slot's VencFrameMeta
+    // grew to 16 bytes, which moves the Annex-B data under every v2 reader.
+    CHECK_EQ_U(kFrameRingVersion, 3);
+    CHECK_EQ_U(kVencFrameMetaSize, 16);
     CHECK_EQ_U(kFrHdrHealthMagic, 76);
     CHECK_EQ_U(kFrHdrFullDrops, 80);
     CHECK_EQ_U(kFrHdrLowWaterSlots, 88);
@@ -441,6 +445,35 @@ int main() {
         old.value->reset();
         auto consumer = FrameShmRing::attach(replacement_name);
         CHECK(static_cast<bool>(consumer));
+    }
+
+    // --- Pass 213: drop_stale skips old backlog, keeps the fresh frames ----
+    {
+        auto prod = FrameShmRing::create(kStale, 8, 128);
+        auto cons = FrameShmRing::attach(kStale);
+        CHECK(bool(prod) && bool(cons));
+        if (prod && cons) {
+            const uint32_t now = 0xFFFFFF00u;  // across the u32 wrap below
+            std::vector<uint8_t> blob(kVencFrameMetaSize + 4, 0);
+            for (uint32_t age : {900000u, 300000u, 150000u, 0u}) {
+                const uint32_t pts = now - age;
+                std::memcpy(blob.data(), &pts, 4);
+                blob[4] = kFrameCodecH265;
+                CHECK((*prod.value)->write_frame(blob.data(), blob.size()));
+            }
+            CHECK_EQ_U((*cons.value)->drop_stale(now + 0x200u, 200000), 2u);
+            std::vector<uint8_t> out(128);
+            CHECK_EQ_U((*cons.value)->read_frame(out.data(), out.size()),
+                       blob.size());
+            uint32_t got = 0;
+            std::memcpy(&got, out.data(), 4);
+            CHECK_EQ_U(got, now - 150000u);
+            CHECK_EQ_U((*cons.value)->drop_stale(now, 200000), 0u);
+            CHECK_EQ_U((*cons.value)->read_frame(out.data(), out.size()),
+                       blob.size());
+            CHECK_EQ_U((*cons.value)->drop_stale(now, 200000), 0u);  // empty
+        }
+        ::shm_unlink(kStale);
     }
 
     return wbtest_finish("frame_shm_test");

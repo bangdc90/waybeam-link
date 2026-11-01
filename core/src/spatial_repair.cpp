@@ -166,6 +166,8 @@ void SpatialRepair::append_conceal_meta() {
     std::memcpy(meta, meta_template_, kVencFrameMetaSize);
     wr_le32(meta, last_pts_ + pts_delta_);
     meta[5] &= kFrameFlagGdr;  // never IDR/ENHANCE on a synthesized meta
+    // §6.3b: chunk 0 was lost, so this frame's sequence is unknown (Pass 213).
+    std::memset(meta + 8, 0, 8);
     rebuilt_.insert(rebuilt_.end(), meta, meta + kVencFrameMetaSize);
 }
 
@@ -203,6 +205,43 @@ bool SpatialRepair::freeze(uint32_t total_ctbs, const Emit& emit) {
     stats_.slices_synthesized += geometry_.size();
     ++stats_.frames_frozen;
     return true;
+}
+
+bool SpatialRepair::conceal_missing(const Emit& emit) {
+    if (!have_sps_ || !have_pps_) {
+        return fail();
+    }
+    return freeze(sps_.pic_size_ctbs, emit);
+}
+
+bool SpatialRepair::conceal_fits(const uint8_t* blob, size_t len,
+                                 uint32_t missing) const {
+    if (!have_sps_ || !have_pps_ || !have_poc_ ||
+        len < kVencFrameMetaSize + 4) {
+        return false;
+    }
+    const uint8_t* p = blob + kVencFrameMetaSize;
+    const size_t n = len - kVencFrameMetaSize;
+    for (size_t i = 0; i + 5 <= n; ++i) {
+        if (!(p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1)) {
+            continue;
+        }
+        const uint8_t t = hevc::nal_type(p + i + 3);
+        if (!hevc::nal_is_vcl(t)) {
+            i += 2;
+            continue;
+        }
+        hevc::SliceInfo slice;
+        if (hevc::nal_is_irap(t) ||
+            !hevc::parse_slice_header(p + i + 3, n - i - 3, sps_, pps_,
+                                      slice) ||
+            !slice.has_poc) {
+            return false;
+        }
+        const uint32_t mask = (1u << sps_.log2_max_poc_lsb) - 1;
+        return slice.poc_lsb == ((last_poc_ + missing + 1) & mask);
+    }
+    return false;
 }
 
 bool SpatialRepair::repair(uint16_t k, uint16_t s, uint32_t frame_len,

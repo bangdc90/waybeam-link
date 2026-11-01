@@ -58,6 +58,10 @@ std::vector<std::vector<uint8_t>> make_blobs() {
             std::memcpy(b.data(), &pts, 4);
             b[4] = wblink::kFrameCodecH265;
             b[5] = (16 <= t && t <= 23) ? wblink::kFrameFlagIdr : 0;
+            const uint32_t seq = static_cast<uint32_t>(blobs.size()) + 1;
+            const uint32_t epoch = 0x5EC0;  // Pass 213 sequence fields
+            std::memcpy(b.data() + 8, &seq, 4);
+            std::memcpy(b.data() + 12, &epoch, 4);
             b.insert(b.end(), prefix.begin(), prefix.end());
             prefix.clear();
             blobs.push_back(std::move(b));
@@ -217,6 +221,14 @@ int main() {
     // A rebuilt meta is stamped too — the bit is set at emit, after
     // append_conceal_meta() has masked the inherited flags.
     CHECK((got[5] & wblink::kFrameFlagSalvaged) != 0);
+    // Pass 213: the lost chunk 0 held the sequence, so the rebuilt meta says
+    // "unknown" (frame_seq = stream_epoch = 0) rather than inherit blobs[3]'s.
+    {
+        wblink::VencFrameMeta synth;
+        CHECK(wblink::read_frame_meta(got.data(), got.size(), &synth));
+        CHECK_EQ_U(synth.frame_seq, 0u);
+        CHECK_EQ_U(synth.stream_epoch, 0u);
+    }
 
     // -- last slice erased, frame_len UNKNOWN ----------------------------
     sr.learn(blobs[4].data(), blobs[4].size());
@@ -253,6 +265,40 @@ int main() {
         CHECK(!sr.repair(k, s, static_cast<uint32_t>(blobs[7].size()),
                          tail_only, grab));
         CHECK_EQ_U(sr.stats().frames_frozen, 0);
+    }
+
+    // -- conceal_missing: a frame that never arrived (no chunk at all) -----
+    {
+        SpatialRepair sm(cfg);
+        got.clear();
+        CHECK(!sm.conceal_missing(grab));  // nothing learned yet: refuse
+        CHECK(!sm.conceal_fits(blobs[1].data(), blobs[1].size(), 0));
+        sm.learn(blobs[0].data(), blobs[0].size());
+        CHECK(sm.poc_lsb_bits() >= 4);
+        // POC check: the next P continues the chain, a skipped one needs a
+        // stand-in each, and an IRAP never "fits" (no stand-in replaces it).
+        CHECK(sm.conceal_fits(blobs[1].data(), blobs[1].size(), 0));
+        CHECK(!sm.conceal_fits(blobs[1].data(), blobs[1].size(), 1));
+        CHECK(sm.conceal_fits(blobs[2].data(), blobs[2].size(), 1));
+        CHECK(!sm.conceal_fits(blobs[2].data(), blobs[2].size(), 0));
+        CHECK(!sm.conceal_fits(blobs[0].data(), blobs[0].size(), 0));
+        sm.learn(blobs[1].data(), blobs[1].size());
+        CHECK(!sm.conceal_missing(grab));  // one donor: RPS not proven stable
+        sm.learn(blobs[1].data(), blobs[1].size());
+        CHECK(sm.conceal_missing(grab));
+        CHECK_EQ_U(count_slices(got.data(), got.size()), 3);
+        CHECK((got[5] & wblink::kFrameFlagSalvaged) != 0);
+        wblink::VencFrameMeta m;
+        CHECK(wblink::read_frame_meta(got.data(), got.size(), &m));
+        CHECK_EQ_U(m.stream_epoch, 0u);  // sequence unknown (Pass 213)
+        CHECK_EQ_U(sm.stats().frames_frozen, 1);
+        // Two missing in a row: the second takes the next POC again.
+        got.clear();
+        CHECK(sm.conceal_missing(grab));
+        CHECK_EQ_U(sm.stats().frames_frozen, 2);
+        // POC 1 learned, stand-ins at 2 and 3: the chain goes on at POC 4.
+        CHECK(sm.conceal_fits(blobs[4].data(), blobs[4].size(), 0));
+        CHECK(!sm.conceal_fits(blobs[2].data(), blobs[2].size(), 0));
     }
 
     // -- whole frame erased with a STABLE RPS: freeze succeeds ------------

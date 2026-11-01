@@ -25,6 +25,13 @@ struct Sym {
     std::vector<uint8_t> payload;
 };
 
+// §15.4 bit 4 (Pass 213): the FEC path stamps FEC-repaired on the egress meta;
+// the Annex-B bytes stay the producer's.
+std::vector<uint8_t> fec_marked(std::vector<uint8_t> blob) {
+    blob[5] |= kFrameFlagFecRepaired;
+    return blob;
+}
+
 std::vector<uint8_t> make_frame(size_t body, bool idr, uint8_t seed) {
     std::vector<uint8_t> b(kVencFrameMetaSize + body, 0);
     b[4] = kFrameCodecH265;
@@ -202,7 +209,7 @@ int main() {
             ra.push(s.block_id, s.flags, s.payload.data(), s.payload.size(), 1000, emit);
         }
         CHECK_EQ_U(got.size(), 1u);
-        CHECK(got[0] == blob);
+        CHECK(got[0] == fec_marked(blob));
         CHECK_EQ_U(ra.stats().frames_fec, 1u);
         CHECK_EQ_U(ra.stats().fec_recovered_source_symbols, 2u);
         CHECK_EQ_U(ra.stats().frames_fec_only, 1u);
@@ -270,7 +277,7 @@ int main() {
         ra.push(repair->block_id, repair->flags, repair->payload.data(),
                 repair->payload.size(), 1001, emit);
         CHECK_EQ_U(got.size(), 1u);
-        CHECK(got[0] == blob);
+        CHECK(got[0] == fec_marked(blob));
         CHECK_EQ_U(ra.stats().frames_fec, 1u);
         CHECK_EQ_U(ra.stats().fec_recovered_source_symbols, 1u);
         CHECK_EQ_U(ra.stats().frames_fec_only, 1u);
@@ -309,7 +316,7 @@ int main() {
                 missing[0]->payload.data(), missing[0]->payload.size(), 1001,
                 emit);
         CHECK_EQ_U(got.size(), 1u);
-        CHECK(got[0] == blob);
+        CHECK(got[0] == fec_marked(blob));
         CHECK_EQ_U(ra.stats().frames_fec, 1u);
         CHECK_EQ_U(ra.stats().fec_recovered_source_symbols, 1u);
         CHECK_EQ_U(ra.stats().frames_fec_only, 1u);
@@ -338,7 +345,7 @@ int main() {
             ra.push(s.block_id, s.flags, s.payload.data(), s.payload.size(), 1000, emit);  // dup
         }
         CHECK_EQ_U(got.size(), 1u);
-        CHECK(got[0] == blob);
+        CHECK(got[0] == fec_marked(blob));
     }
 
     // --- unrecoverable: drop more than r; nothing emitted; drop on deadline --
@@ -505,7 +512,7 @@ int main() {
         }
         CHECK(forged_one);
         CHECK_EQ_U(got.size(), 1u);
-        CHECK(!got.empty() && got[0] == blob);
+        CHECK(!got.empty() && got[0] == fec_marked(blob));
         CHECK_EQ_U(ra.stats().malformed, 1u);
     }
 

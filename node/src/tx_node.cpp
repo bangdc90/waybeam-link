@@ -327,6 +327,17 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
         bool pending = false;
     };
     std::vector<ShmIn> shm_ins;
+    // §15.4 Pass 213: a (re)attach finds the frames the producer queued while
+    // no TX read the ring -- up to a whole slot ring of old video. Sending it
+    // shows the past on the ground and hides the outage behind contiguous
+    // frame_seq; skip what is older than any live backlog (8 slots ~150 ms).
+    const auto skip_stale_backlog = [](const ShmIn& si) {
+        if (const uint64_t n = si.ring->drop_stale(
+                static_cast<uint32_t>(now_us()), 200000)) {
+            wb_logf("tx: frame-shm '%s': %llu stale frames skipped\n",
+                    si.name.c_str(), static_cast<unsigned long long>(n));
+        }
+    };
     bool have_udp_ins = false;
     for (const StreamCfg& s : l.cfg.streams) {
         if (s.dir != Dir::kIn) {
@@ -342,6 +353,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
             si.ring = std::move(*r.value);
             wb_logf("tx: frame-shm '%s' attached\n",
                     s.bind.name.c_str());
+            skip_stale_backlog(si);
         } else {
             wb_logf("tx: frame-shm '%s' not up yet (%s); retrying\n",
                     s.bind.name.c_str(), r.error.c_str());
@@ -1130,6 +1142,7 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
                     si.pending = false;
                     wb_logf("tx: frame-shm '%s' attached\n",
                             si.name.c_str());
+                    skip_stale_backlog(si);
                 }
             }
             next_shm_attach_ms = now + 500;

@@ -3,7 +3,7 @@
 //
 // Byte-for-byte mirror of the producer's canonical header
 // waybeam_venc/include/venc_frame_ring.h. This file carries ONLY the pure
-// format (layout constants + the 8-byte metadata prefix and helpers to read
+// format (layout constants + the 16-byte metadata prefix and helpers to read
 // it) — no mmap, no atomics, no futex. The live ring (io/frame_shm.cpp) does
 // the I/O and memory-ordered index access; it reuses these constants so the
 // two sides cannot drift.
@@ -26,7 +26,9 @@ inline constexpr uint32_t kFrameRingMagic = 0x5646524D;  // "VFRM"
 // polarity (1000 was healthy; a HIGH slot count is now the unhealthy end), so
 // the producer bumped the version deliberately rather than renaming in place:
 // attach() refuses a mismatch, which turns a silent misread into a loud one.
-inline constexpr uint32_t kFrameRingVersion = 2;
+// v3 (Pass 213): VencFrameMeta grew 8 -> 16 bytes (frame_seq, stream_epoch),
+// so the Annex-B data moved; a v2 peer must refuse rather than misparse it.
+inline constexpr uint32_t kFrameRingVersion = 3;
 inline constexpr size_t kFrameRingHeaderSize = 192;  // 3x 64-byte cache lines
 
 // Byte offsets within the 192-byte ring header (line 0 = immutable config,
@@ -67,8 +69,8 @@ inline constexpr size_t kFrameSlotLenPrefix = 4;
 inline constexpr uint32_t kFrameRingDefaultSlots = 16;
 inline constexpr uint32_t kFrameRingDefaultSlotSize = 512 * 1024;
 
-// §15.4 VencFrameMeta — 8-byte prefix on every frame blob.
-inline constexpr size_t kVencFrameMetaSize = 8;
+// §15.4 VencFrameMeta — 16-byte prefix on every frame blob.
+inline constexpr size_t kVencFrameMetaSize = 16;
 inline constexpr uint8_t kFrameCodecH265 = 0x01;
 inline constexpr uint8_t kFrameFlagIdr = 0x01;  // VencFrameMeta.flags bit 0
 inline constexpr uint8_t kFrameFlagGdr = 0x02;  // rolling intra stripe active
@@ -80,8 +82,14 @@ inline constexpr uint8_t kFrameFlagEnhance = 0x04;  // SVC-T droppable layer
 // Absence means "not known to be salvaged", never a guarantee of integrity:
 // a producer predating this bit leaves it clear.
 inline constexpr uint8_t kFrameFlagSalvaged = 0x08;
-inline constexpr uint8_t kFrameFlagsKnown =
-    kFrameFlagIdr | kFrameFlagGdr | kFrameFlagEnhance | kFrameFlagSalvaged;
+// Set by the RX side (§6.3a outcome 3, Pass 213): the GF(256) decode rebuilt
+// lost source symbols. The Annex-B bytes are what was sent -- packet loss that
+// FEC repaired, not frame loss.
+inline constexpr uint8_t kFrameFlagFecRepaired = 0x10;
+inline constexpr uint8_t kFrameFlagsKnown = kFrameFlagIdr | kFrameFlagGdr |
+                                            kFrameFlagEnhance |
+                                            kFrameFlagSalvaged |
+                                            kFrameFlagFecRepaired;
 
 struct VencFrameMeta {
     uint32_t pts = 0;       // encoder capture timestamp (SDK units), truncated
@@ -89,7 +97,12 @@ struct VencFrameMeta {
     uint8_t flags = 0;      // kFrameFlag* bitmap
     uint8_t gdr_pos = 0;    // 0-based position in GDR cycle
     uint8_t gdr_len = 0;    // GDR cycle length; 0 while inactive
+    // Pass 213: +1 per encoded access unit, producer drops included; mod 2^32.
+    uint32_t frame_seq = 0;
+    uint32_t stream_epoch = 0;  // per producer ring, never 0; 0 = seq unknown
 };
+static_assert(sizeof(VencFrameMeta) == kVencFrameMetaSize,
+              "VencFrameMeta mirrors the producer's 16-byte prefix");
 
 // Read the 8-byte metadata prefix from a frame blob (native-endian, same-host).
 // Returns false if the blob is too short to hold the prefix.
@@ -102,6 +115,8 @@ inline bool read_frame_meta(const uint8_t* blob, size_t len, VencFrameMeta* out)
     out->flags = blob[5];
     out->gdr_pos = blob[6];
     out->gdr_len = blob[7];
+    std::memcpy(&out->frame_seq, blob + 8, 4);
+    std::memcpy(&out->stream_epoch, blob + 12, 4);
     return true;
 }
 

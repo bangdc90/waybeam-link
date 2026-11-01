@@ -61,6 +61,13 @@ class FrameShmRing {
     // -1 = a bad/oversized slot (skipped) or buf too small (cap < frame).
     long read_frame(uint8_t* buf, size_t cap);
 
+    // Consumer (§15.4 Pass 213): skip queued frames whose VencFrameMeta.pts
+    // (capture time, same-host CLOCK_MONOTONIC us) is more than max_age_us
+    // before now_pts -- the backlog a re-attaching consumer would otherwise
+    // send as live video. Stops at the first fresh or unreadable slot.
+    // Returns the number skipped.
+    uint64_t drop_stale(uint32_t now_pts, uint32_t max_age_us);
+
     int event_fd() const { return event_fd_; }  // consumer readiness; -1 producer
     void drain_event();                          // read() the eventfd after servicing
     bool is_consumer() const { return is_consumer_; }

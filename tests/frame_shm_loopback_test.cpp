@@ -33,6 +33,13 @@ const char* kInRing = "/wblink-frame-shm-loopback-in";
 const char* kOutRing = "/wblink-frame-shm-loopback-out";
 
 // One [VencFrameMeta][Annex-B] blob with a deterministic body (§15.4 layout).
+// §15.4 bit 4 (Pass 213): the FEC path stamps FEC-repaired on the egress meta;
+// the Annex-B bytes stay the producer's.
+std::vector<uint8_t> fec_marked(std::vector<uint8_t> blob) {
+    blob[5] |= kFrameFlagFecRepaired;
+    return blob;
+}
+
 std::vector<uint8_t> make_frame(size_t body, bool idr, uint8_t seed) {
     std::vector<uint8_t> b(kVencFrameMetaSize + body, 0);
     b[4] = kFrameCodecH265;
@@ -177,7 +184,7 @@ int main() {
             const long got = oc.read_frame(obuf.data(), obuf.size());
             CHECK_EQ_U(static_cast<unsigned long long>(got), blob.size());
             CHECK(got > 0 &&
-                  std::memcmp(obuf.data(), blob.data(), blob.size()) == 0);
+                  std::memcmp(obuf.data(), (cs.lossy ? fec_marked(blob) : blob).data(), blob.size()) == 0);
             CHECK_EQ_U(oc.read_frame(obuf.data(), obuf.size()), 0);  // just one
             ++t;
         }
@@ -249,7 +256,7 @@ int main() {
         const long got = oc.read_frame(obuf.data(), obuf.size());
         CHECK_EQ_U(static_cast<unsigned long long>(got), blob.size());
         CHECK(got > 0 &&
-              std::memcmp(obuf.data(), blob.data(), blob.size()) == 0);
+              std::memcmp(obuf.data(), fec_marked(blob).data(), blob.size()) == 0);
         CHECK_EQ_U(ordered_deliveries, 0u);  // no second delivery on seq drain
         const auto streams = rx.streams();
         CHECK_EQ_U(streams.size(), 1u);

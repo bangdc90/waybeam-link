@@ -488,17 +488,17 @@ int main() {
 
         // A small P frame: r = ceil(3 * 0.2) = 1.
         Harness p(fec);
-        p.feed(make_frame(3 * s - 8, /*idr=*/false, 20));  // k = 3
+        p.feed(make_frame(3 * s - kVencFrameMetaSize, /*idr=*/false, 20));  // k = 3
         CHECK_EQ_U(repair_count_of(p.sent), 1u);
 
         // A small IDR: r = ceil(3 * 0.3) = 1.
         Harness i(fec);
-        i.feed(make_frame(3 * s - 8, /*idr=*/true, 22));
+        i.feed(make_frame(3 * s - kVencFrameMetaSize, /*idr=*/true, 22));
         CHECK_EQ_U(repair_count_of(i.sent), 1u);
 
         // Above the old min_k the rate is the only term.
         Harness big(fec);
-        big.feed(make_frame(5 * s - 8, /*idr=*/false, 24));  // k = 5
+        big.feed(make_frame(5 * s - kVencFrameMetaSize, /*idr=*/false, 24));  // k = 5
         CHECK_EQ_U(repair_count_of(big.sent), 1u);  // ceil(5 * 0.2)
     }
 
@@ -517,17 +517,17 @@ int main() {
         const uint16_t s = Harness(fec).framer.symbol_size();
         // k=1 P-frame: ceil(1*0.2)=1, floored to min_r=2 — the only lever for
         // k=1, since ceil(1*rate)=1 for any rate <= 1000.
-        CHECK_EQ_U(rcount(1 * s - 8, false), 2u);
+        CHECK_EQ_U(rcount(1 * s - kVencFrameMetaSize, false), 2u);
         // k=3: ceil(3*0.2)=1 -> floored to 2.
-        CHECK_EQ_U(rcount(3 * s - 8, false), 2u);
+        CHECK_EQ_U(rcount(3 * s - kVencFrameMetaSize, false), 2u);
         // Large frame: ceil(20*0.2)=4 already exceeds the floor, so unchanged.
-        CHECK_EQ_U(rcount(20 * s - 8, false), 4u);
+        CHECK_EQ_U(rcount(20 * s - kVencFrameMetaSize, false), 4u);
         // A P_rate=0 stream stays deliberately bare: the floor must not force
         // FEC on where the rate says none.
         FrameFecConfig off = fec;
         off.p_rate_permille = 0;
         Harness disabled(off);
-        disabled.feed(make_frame(3 * s - 8, false, 32));
+        disabled.feed(make_frame(3 * s - kVencFrameMetaSize, false, 32));
         CHECK_EQ_U(repair_count_of(disabled.sent), 0u);
     }
 

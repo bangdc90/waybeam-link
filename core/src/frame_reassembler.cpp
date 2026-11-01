@@ -220,6 +220,7 @@ bool FrameReassembler::try_complete(uint32_t id, Block& b, const Emit& emit) {
             scratch_.assign(static_cast<size_t>(k) * s, 0);
             if (dec.decode(scratch_.data())) {
                 scratch_.resize(b.frame_len);  // trim last-symbol padding
+                scratch_[5] |= kFrameFlagFecRepaired;  // §15.4 bit 4
                 const bool accepted = emit(scratch_.data(), scratch_.size());
                 observe_shadow(id, b);
                 if (accepted) {
