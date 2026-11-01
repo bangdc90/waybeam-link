@@ -319,6 +319,10 @@ Decoded decode_announce(const uint8_t* buf, size_t len) {
     if ((flags & ~announce_flags::kKnownMask) != 0) {
         return DecodeError::kInvalidField;  // reserved bits must be 0
     }
+    if (((flags & announce_flags::kTxPowerTierMask) >>
+         announce_flags::kTxPowerTierShift) > announce_flags::kTxPowerTierMax) {
+        return DecodeError::kInvalidField;  // Pass 215: tier field 6–7
+    }
     Announce a;
     a.prefix = decode_prefix(buf);
     a.flags = flags;

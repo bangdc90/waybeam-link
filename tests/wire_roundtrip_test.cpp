@@ -199,7 +199,9 @@ int main() {
     for (int i = 0; i < kIters; ++i) {
         Announce a;
         a.prefix = random_prefix(rng);
-        a.flags = static_cast<uint8_t>(rng.u8() & announce_flags::kKnownMask);
+        a.flags = static_cast<uint8_t>(
+            (rng.u8() & (announce_flags::kClaimed | announce_flags::kPskPresent)) |
+            announce_flags::tx_power_tier_bits(static_cast<int>(rng.range(0, 5)) - 1));
         a.claimed_by = rng.u16();
         for (uint8_t& b : a.psk) {
             b = rng.u8();
@@ -341,11 +343,33 @@ int main() {
         CHECK(std::get_if<TimeBeacon>(&addressed) == nullptr);
     }
 
+    // §3.12 Pass 215: the tier field reads back, and its values 6–7 are
+    // decode errors like a reserved bit.
+    {
+        Announce a;
+        a.prefix = random_prefix(rng);
+        a.flags = announce_flags::tx_power_tier_bits(4);
+        CHECK_EQ_U(a.flags, 0x14);
+        CHECK_EQ_U(encode_announce(a, buf, sizeof(buf)), kAnnounceSize);
+        const Decoded d = decode(buf, kAnnounceSize);
+        const Announce* v = std::get_if<Announce>(&d);
+        CHECK(v != nullptr && announce_flags::tx_power_tier(v->flags) == 4);
+        CHECK(announce_flags::tx_power_tier(0) == -1);
+        CHECK_EQ_U(announce_flags::tx_power_tier_bits(-1), 0);
+        CHECK_EQ_U(announce_flags::tx_power_tier_bits(5), 0);  // past 0..4
+        for (const uint8_t bad : {uint8_t{0x18}, uint8_t{0x1C}}) {
+            a.flags = bad;
+            CHECK_EQ_U(encode_announce(a, buf, sizeof(buf)), kAnnounceSize);
+            const Decoded e = decode(buf, kAnnounceSize);
+            CHECK(std::get_if<DecodeError>(&e) != nullptr);
+        }
+    }
+
     // §3.12: reserved flag bits and wrong length are decode errors.
     {
         Announce a;
         a.prefix = random_prefix(rng);
-        a.flags = 0x04;  // reserved bit set
+        a.flags = 0x20;  // reserved bit set (bits 2–4 are the P215 tier)
         const size_t n = encode_announce(a, buf, sizeof(buf));
         CHECK_EQ_U(n, kAnnounceSize);
         const Decoded bad_flags = decode(buf, n);

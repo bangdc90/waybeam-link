@@ -463,10 +463,11 @@ struct AirBackend {
     // ~2 Hz in both claimed and unclaimed states so a rebooted ground can
     // re-learn the token and re-claim in place (§11.5a). psk_present selects
     // announced (token in psk) vs secret (all-zero) mode; claimed/claimed_by
-    // come from the follower's §11.5a binding.
+    // come from the follower's §11.5a binding. tx_power_tier is the held
+    // §11.7 0x0A tier, -1 = none (Pass 215).
     void announce(uint16_t originator, uint32_t session, uint64_t now,
                   const uint8_t* token, bool psk_present, bool claimed,
-                  uint16_t claimed_by) {
+                  uint16_t claimed_by, int tx_power_tier = -1) {
         static constexpr uint64_t kAnnounceIntervalMs = 500;  // §3.12 1–2 Hz
         if (now < last_announce_ms ||
             now - last_announce_ms < kAnnounceIntervalMs) {
@@ -476,7 +477,7 @@ struct AirBackend {
         Announce a;
         a.prefix.originator = originator;
         a.prefix.session_id = session;  // destination = 0 (§3.12)
-        a.flags = 0;
+        a.flags = announce_flags::tx_power_tier_bits(tx_power_tier);
         if (claimed) {
             a.flags |= announce_flags::kClaimed;
             a.claimed_by = claimed_by;

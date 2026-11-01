@@ -486,6 +486,21 @@ void test_candidate_rssi_is_strongest_and_absent_reads_null() {
 
 }  // namespace
 
+// §3.12/§15.5 Pass 215: the craft's held 0x0A tier from ANNOUNCE reaches
+// /discovery, -1 when the craft holds none, so the ground menu can show it.
+void test_discovery_reports_the_announced_power_tier() {
+    DiscoveryCatalog cat;
+    wblink::Announce an{};
+    an.prefix.originator = 17;
+    an.prefix.session_id = 99;
+    cat.observe(an, 1000, 0);
+    CHECK(cat.json(1000, {}).find("\"tx_power_tier\":-1") != std::string::npos);
+    an.flags = wblink::announce_flags::tx_power_tier_bits(3);
+    cat.observe(an, 1500, 0);
+    CHECK(cat.json(1500, {}).find("\"claimed_by\":0,\"tx_power_tier\":3") !=
+          std::string::npos);
+}
+
 int main() {
     test_scout_boots_idle_and_refuses_an_empty_sweep();
     test_scout_start_widens_the_filter_then_retunes();
@@ -500,5 +515,6 @@ int main() {
     test_short_dwell_probes_but_anything_heard_extends();
     test_a_second_craft_on_one_channel_is_not_truncated_away();
     test_candidate_rssi_is_strongest_and_absent_reads_null();
+    test_discovery_reports_the_announced_power_tier();
     return wbtest_finish("node_discovery_test");
 }

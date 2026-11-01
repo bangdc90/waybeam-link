@@ -60,7 +60,21 @@ inline constexpr uint8_t kCsaArmed = 0x10;
 namespace announce_flags {
 inline constexpr uint8_t kClaimed = 0x01;      // craft is bound to a command source
 inline constexpr uint8_t kPskPresent = 0x02;   // the 16-byte token is populated
-inline constexpr uint8_t kKnownMask = kClaimed | kPskPresent;
+// Pass 215: bits 2–4 = held §11.7 0x0A tier + 1 (0 = none, 6–7 invalid).
+inline constexpr uint8_t kTxPowerTierShift = 2;
+inline constexpr uint8_t kTxPowerTierMask = 0x1C;
+inline constexpr uint8_t kTxPowerTierMax = 5;  // field value for tier 4
+inline constexpr uint8_t kKnownMask = kClaimed | kPskPresent | kTxPowerTierMask;
+// -1 = no tier held, else the tier 0..4 (the field must already be valid).
+inline constexpr int tx_power_tier(uint8_t flags) {
+    return ((flags & kTxPowerTierMask) >> kTxPowerTierShift) - 1;
+}
+// The flag bits for a held tier (-1 or anything out of 0..4 = none).
+inline constexpr uint8_t tx_power_tier_bits(int tier) {
+    return tier < 0 || tier + 1 > kTxPowerTierMax
+               ? 0
+               : static_cast<uint8_t>((tier + 1) << kTxPowerTierShift);
+}
 }  // namespace announce_flags
 
 // §3.12/§11.4a — session pairing token width (also the CSA HMAC key when auto).

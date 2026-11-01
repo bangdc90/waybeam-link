@@ -365,6 +365,9 @@ struct CmdPolicy {
     uint32_t ack_timeout_ms = 1000;
     uint32_t retry_cap = 3;
     uint32_t min_interval_ms = 250;
+    // §15.2 Pass 215: record each accepted §11.7 0x0A tier, re-select at boot.
+    bool persist_tx_power = false;
+    std::string tx_power_file = "/etc/waybeam-link/power.json";
 };
 
 // §10.6 (Pass 120) craft-resident calibration seeds — mirrors

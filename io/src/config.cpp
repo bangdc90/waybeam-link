@@ -1040,6 +1040,10 @@ Result<Config> load_config_json(const std::string& json_text) {
                 cmd.ack_timeout_ms =
                     pm.value("ack_timeout_ms", cmd.ack_timeout_ms);
                 cmd.retry_cap = pm.value("retry_cap", cmd.retry_cap);
+                cmd.persist_tx_power =
+                    pm.value("persist_tx_power", cmd.persist_tx_power);
+                cmd.tx_power_file =
+                    pm.value("tx_power_file", cmd.tx_power_file);
                 // Both narrow to uint8_t in vcmd_params() and are decremented
                 // pre-test, so 0 wraps to 255: a 3-copy command becomes a
                 // 256-copy transmit storm. Range-check where the value is

@@ -268,7 +268,7 @@ struct CacheReplyView {
 // secret (§11.4a). Node-scoped like HEARTBEAT: never creates per-stream state.
 struct Announce {
     CommonPrefix prefix;
-    uint8_t flags = 0;         // §3.12: kClaimed, kPskPresent
+    uint8_t flags = 0;         // §3.12: kClaimed, kPskPresent, tier (P215)
     uint16_t claimed_by = 0;   // originator of the binding ground, else 0 (advisory)
     uint8_t psk[kAnnouncePskSize] = {};  // token when kPskPresent, else all-zero
     friend bool operator==(const Announce&, const Announce&) = default;

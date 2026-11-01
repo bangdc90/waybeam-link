@@ -35,6 +35,7 @@
 
 #include "wblink/air_udp.h"
 #include "wblink/channel_persist.h"
+#include "wblink/power_persist.h"
 #include "wblink/airtime.h"
 #include "wblink/binding.h"
 #include "wblink/cache_assignment.h"
@@ -512,7 +513,10 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
                     target.c_str(), l.cfg.osd.apply_cmd.c_str());
             return true;
         }
-        return tx.apply_command(id, arg, now_ms());
+        const bool ok = tx.apply_command(id, arg, now_ms());
+        // §15.2 Pass 215: an accepted tier survives a reboot when persisted.
+        if (ok && id == vcmd_id::kTxPower) record_tier(l.cfg, arg);
+        return ok;
     };
     // §9.10 TX-wedge watchdog over the TX adapter's CCX-report counters.
     TxWedge wedge(TxWedgePolicy{l.cfg.air.wedge_window_ms,
@@ -903,6 +907,21 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
     // applied before the first frame goes out — a node must never transmit at
     // the uncharacterised efuse default even briefly.
     tx.apply_boot_power_offsets();
+    // §15.2 Pass 215: re-select the recorded §11.7 0x0A tier, after the boot
+    // offset so the radio never runs at the efuse default even briefly.
+    if (l.cfg.policy.cmd.persist_tx_power) {
+        const std::string& file = l.cfg.policy.cmd.tx_power_file;
+        if (const auto tier = read_persisted_tier(file)) {
+            if (!tx.set_power_tier(*tier)) {
+                wb_logf("power: persisted tier %u from %s REFUSED (no such "
+                        "preset) — boot offset stands (Pass 215)\n",
+                        *tier, file.c_str());
+            }
+        } else {
+            wb_logf("power: no persisted tier at %s — boot offset (Pass "
+                    "215)\n", file.c_str());
+        }
+    }
     wb_logf("tx: session=%u, running%s\n", session,
             qg.enabled() ? " (quiet-gap pacing)" : "");
     std::optional<uint16_t> prior_bound_issuer;
@@ -1301,7 +1320,8 @@ int run_tx(Loaded& l, const std::atomic<int>& stop,
             const std::optional<uint16_t> latched = csa.latched_issuer();
             air.value->announce(l.cfg.node.originator, session, service_now,
                                 token.data(), psk_announced,
-                                latched.has_value(), latched.value_or(0));
+                                latched.has_value(), latched.value_or(0),
+                                tx.power_tier());
         }
         if (const auto trc = air.value->tx_progress_counters()) {
             if (wedge.poll(now, trc->first, trc->second)) {

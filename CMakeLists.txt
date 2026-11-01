@@ -393,6 +393,7 @@ add_library(wblink_io STATIC
     io/src/adapter_elect.cpp
     io/src/channel_persist.cpp
     io/src/config.cpp
+    io/src/power_persist.cpp
     io/src/precise_sleep.cpp
     io/src/config_registry.cpp
     io/src/log.cpp

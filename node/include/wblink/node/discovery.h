@@ -59,6 +59,7 @@ class DiscoveryCatalog {
             n.claimed = (an->flags & announce_flags::kClaimed) != 0;
             n.claimed_by = an->claimed_by;
             n.psk_present = (an->flags & announce_flags::kPskPresent) != 0;
+            n.tx_power_tier = announce_flags::tx_power_tier(an->flags);  // P215
             // Pass 63: the announced token is public — cache it. It is kept
             // OUTSIDE `nodes_` deliberately: `nodes_` is the presence view and
             // `json()` ages it at 5 s, so a token stored there survived only
@@ -105,6 +106,7 @@ class DiscoveryCatalog {
             if (n.announced) {  // §15.5 ANNOUNCE claim view (Pass 62; no token)
                 out += ",\"claimed\":" + std::string(n.claimed ? "true" : "false") +
                        ",\"claimed_by\":" + std::to_string(n.claimed_by) +
+                       ",\"tx_power_tier\":" + std::to_string(n.tx_power_tier) +
                        ",\"psk_present\":" +
                        std::string(n.psk_present ? "true" : "false");
             }
@@ -176,6 +178,7 @@ class DiscoveryCatalog {
         bool announced = false;  // §3.12 ANNOUNCE seen (Pass 62)
         bool claimed = false;
         uint16_t claimed_by = 0;
+        int tx_power_tier = -1;  // §3.12 Pass 215, -1 = none held
         bool psk_present = false;
     };
     // Pass 63 token cache, keyed by originator and NOT aged — see `observe()`.
