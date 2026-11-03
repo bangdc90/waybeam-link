@@ -24,6 +24,37 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 216 — §15.5 clock and uplink on the RX C ABI (2026-11-03)
+
+Operator ruling 2026-11-03 (android-ground SWR-013, SWR-023, SYS-017): the
+Android ground runs `wblink_rx` in-process with `WBLINK_CONTROL_SERVER=OFF`,
+so `GET /api/v1/clock` (the latency readout's offset) and `GET`/`POST
+/api/v1/uplink` (the menu's Ground TX item, the unmute before a channel
+switch) are unreachable there.
+
+Ruled:
+
+1. `wblink_rx_clock` — the `GET /api/v1/clock` body, byte for byte, under the
+   snapshot buffer contract; each copy requests a fresh publication.
+2. `wblink_rx_uplink` — the `GET /api/v1/uplink` body, same contract, plus
+   the applied uplink generation.
+3. `wblink_rx_uplink_set(rx, tx, auto_mute, &generation)` — `POST
+   /api/v1/uplink`, queued and applied by the loop. `auto_mute` with `tx` 0
+   returns 2 (REST 400). The loop's refusals (no `role:"tx"` adapter,
+   `auto_mute_s` 0: REST 409) change nothing, are logged, and read back from
+   the next `wblink_rx_uplink` (`tx_adapter`, `auto_mute_s`).
+4. The uplink command has its own latest-intent slot: it neither supersedes
+   nor is superseded by a scout, claim or vehicle command, because a menu
+   unmutes and then switches channel back to back.
+5. One generator per surface: the clock and uplink lambdas move to `run_rx`
+   scope, out of `#if WBLINK_CONTROL_SERVER`, and REST calls the same ones.
+
+No wire, config-key or JSON-shape change; return codes as the scout calls.
+
+**Evidence.** Branch `impl/gk7205-hi3536-fpv`;
+`tests/rx_runtime_control_test.cpp` (slot independence, snapshot round trip);
+`examples/node-linkcheck` compiles the header as C.
+
 ## Pass 215 — §3.12 ANNOUNCE `tx_power_tier`; §15.2 `policy.cmd.persist_tx_power` (2026-11-01)
 
 Operator ruling 2026-11-01 (waybeam `documentation/ONCAM_OSD_PLAN.md` §T9.2,
