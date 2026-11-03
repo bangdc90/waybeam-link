@@ -213,6 +213,30 @@ int wblink_rx_health(wblink_rx* rx, char* buffer, size_t capacity,
     return rx->runtime_control.copy_health(buffer, capacity, required);
 }
 
+int wblink_rx_clock(wblink_rx* rx, char* buffer, size_t capacity,
+                    size_t* required) {
+    if (rx == nullptr) return 2;
+    return rx->runtime_control.copy_clock(buffer, capacity, required);
+}
+
+int wblink_rx_uplink(wblink_rx* rx, char* buffer, size_t capacity,
+                     size_t* required, uint64_t* applied_generation) {
+    if (rx == nullptr) return 2;
+    uint64_t ignored = 0;
+    return rx->runtime_control.copy_uplink(
+        buffer, capacity, required,
+        applied_generation != nullptr ? applied_generation : &ignored);
+}
+
+int wblink_rx_uplink_set(wblink_rx* rx, int tx, int auto_mute,
+                         uint64_t* generation) {
+    if (rx == nullptr) return 2;
+    uint64_t ignored = 0;
+    return rx->runtime_control.enqueue_uplink(
+        tx != 0, auto_mute != 0,
+        generation != nullptr ? generation : &ignored);
+}
+
 int wblink_rx_selection(wblink_rx* rx, char* buffer, size_t capacity,
                         size_t* required, uint64_t* applied_generation) {
     if (rx == nullptr) return 2;

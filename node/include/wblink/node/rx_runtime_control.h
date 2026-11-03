@@ -85,6 +85,22 @@ class RxRuntimeControl {
     void note_applied(uint64_t generation);
     uint64_t applied_generation() const;
 
+    // Pass 216: §15.5 POST /api/v1/uplink. Its OWN latest-intent slot and
+    // applied generation: a menu unmutes and then switches channel back to
+    // back, so an uplink command must not supersede an un-taken claim (or be
+    // superseded by one), and applying it must not mark a pending claim
+    // applied. Generations still come from the one counter, so they stay
+    // unique across both slots. `auto_mute` without `tx` is 2 (REST 400).
+    struct UplinkCommand {
+        bool tx = true;
+        bool auto_mute = false;
+        uint64_t generation = 0;
+    };
+    int enqueue_uplink(bool tx, bool auto_mute, uint64_t* generation);
+    std::optional<UplinkCommand> take_uplink();
+    void note_uplink_applied(uint64_t generation);
+    uint64_t uplink_applied_generation() const;
+
     // A reader requests a fresh snapshot as part of every copy attempt. The
     // RX loop consumes these edge flags and serializes loop-owned state on its
     // own thread. A request arriving after a take remains set for the next
@@ -93,6 +109,8 @@ class RxRuntimeControl {
     bool take_discovery_snapshot_request();
     bool take_selection_snapshot_request();
     bool take_command_snapshot_request();
+    bool take_clock_snapshot_request();   // Pass 216
+    bool take_uplink_snapshot_request();  // Pass 216
 
     // Publication swaps an immutable string. Scout generation names the
     // command state represented by that JSON and is returned atomically with
@@ -120,6 +138,11 @@ class RxRuntimeControl {
     // Pass 178: "addr:port" as resolved from the listening socket, published
     // once, after a successful bind. Not JSON — a bare endpoint string.
     void publish_control_endpoint(std::string endpoint);
+    // Pass 216: the GET /api/v1/clock and GET /api/v1/uplink bodies, from the
+    // same generators the control server calls. The uplink snapshot carries
+    // the uplink applied generation, never the scout/claim one.
+    void publish_clock(std::string json);
+    void publish_uplink(std::string json, uint64_t generation);
 
     // Buffer-copy contract for the C shim: `required` includes the trailing
     // NUL. NULL + zero is a size query. Returns 0 on success/query, 2 for bad
@@ -136,6 +159,9 @@ class RxRuntimeControl {
     int copy_stats(char* buffer, size_t capacity, size_t* required);
     int copy_health(char* buffer, size_t capacity, size_t* required);
     int copy_control_endpoint(char* buffer, size_t capacity, size_t* required);
+    int copy_clock(char* buffer, size_t capacity, size_t* required);
+    int copy_uplink(char* buffer, size_t capacity, size_t* required,
+                    uint64_t* generation);
 
   private:
     // GeneratedSnapshot moved to snapshot_copy.h with the copy contract
@@ -145,10 +171,14 @@ class RxRuntimeControl {
     uint64_t next_generation_ = 0;
     uint64_t applied_generation_ = 0;
     std::optional<Command> pending_;
+    uint64_t uplink_applied_generation_ = 0;
+    std::optional<UplinkCommand> pending_uplink_;
     bool scout_snapshot_requested_ = false;
     bool discovery_snapshot_requested_ = false;
     bool selection_snapshot_requested_ = false;
     bool command_snapshot_requested_ = false;
+    bool clock_snapshot_requested_ = false;
+    bool uplink_snapshot_requested_ = false;
     std::shared_ptr<const GeneratedSnapshot> scout_snapshot_;
     std::shared_ptr<const std::string> discovery_snapshot_;
     std::shared_ptr<const std::string> adapters_snapshot_;
@@ -157,6 +187,8 @@ class RxRuntimeControl {
     std::shared_ptr<const std::string> stats_snapshot_;
     std::shared_ptr<const std::string> health_snapshot_;
     std::shared_ptr<const std::string> control_endpoint_;
+    std::shared_ptr<const std::string> clock_snapshot_;
+    std::shared_ptr<const GeneratedSnapshot> uplink_snapshot_;
 };
 
 }  // namespace node

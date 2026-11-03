@@ -386,6 +386,85 @@ void test_stats_and_health_slots() {
     CHECK_EQ_U(required, std::strlen("127.0.0.1:8092") + 1);
 }
 
+// Pass 216: the uplink slot is independent of the command slot in both
+// directions, and its applied generation is its own.
+void test_uplink_slot_and_clock() {
+    RxRuntimeControl ctl;
+    uint64_t gen = 77;
+    CHECK(ctl.enqueue_uplink(true, false, &gen) == 3);  // closed mailbox
+    CHECK_EQ_U(gen, 77);
+
+    ctl.start_run();
+    CHECK(ctl.enqueue_uplink(false, true, &gen) == 2);  // re-arm needs tx
+    CHECK(ctl.enqueue_uplink(true, false, nullptr) == 2);
+    CHECK_EQ_U(gen, 77);
+
+    // Unmute then claim back to back: neither supersedes the other.
+    uint64_t up_gen = 0, claim_gen = 0;
+    CHECK(ctl.enqueue_uplink(true, true, &up_gen) == 0);
+    CHECK(ctl.enqueue_claim(4242, 5805, &claim_gen) == 0);
+    CHECK(claim_gen > up_gen);  // one counter: unique across both slots
+    auto cmd = ctl.take_command();
+    CHECK(cmd.has_value() && cmd->kind == RxRuntimeControl::CommandKind::kClaim);
+    auto up = ctl.take_uplink();
+    CHECK(up.has_value());
+    if (up) {
+        CHECK(up->tx && up->auto_mute);
+        CHECK_EQ_U(up->generation, up_gen);
+    }
+    CHECK(!ctl.take_uplink().has_value());
+
+    // Latest intent within the uplink slot only.
+    uint64_t mute_gen = 0, unmute_gen = 0;
+    CHECK(ctl.enqueue_uplink(false, false, &mute_gen) == 0);
+    CHECK(ctl.enqueue_uplink(true, false, &unmute_gen) == 0);
+    up = ctl.take_uplink();
+    CHECK(up.has_value() && up->tx && !up->auto_mute &&
+          up->generation == unmute_gen);
+
+    // Applying the uplink does not mark the claim applied, nor the reverse.
+    ctl.note_uplink_applied(unmute_gen);
+    CHECK_EQ_U(ctl.applied_generation(), 0);
+    CHECK_EQ_U(ctl.uplink_applied_generation(), unmute_gen);
+    ctl.note_applied(claim_gen);
+    CHECK_EQ_U(ctl.uplink_applied_generation(), unmute_gen);
+
+    // Snapshots: 3 with the applied uplink generation before the first
+    // publish, a request edge armed by every good copy and not by a bad one.
+    std::array<char, 256> out{};
+    size_t required = 0;
+    uint64_t got = 0;
+    CHECK(ctl.copy_uplink(out.data(), out.size(), nullptr, &got) == 2);
+    CHECK(ctl.copy_clock(out.data(), out.size(), nullptr) == 2);
+    CHECK(!ctl.take_uplink_snapshot_request());
+    CHECK(!ctl.take_clock_snapshot_request());
+    CHECK(ctl.copy_uplink(nullptr, 0, &required, &got) == 3);
+    CHECK_EQ_U(got, unmute_gen);
+    CHECK(ctl.take_uplink_snapshot_request());
+    CHECK(!ctl.take_uplink_snapshot_request());
+    CHECK(ctl.copy_clock(nullptr, 0, &required) == 3);
+    CHECK(ctl.take_clock_snapshot_request());
+
+    const char* up_json =
+        "{\"tx_adapter\":true,\"muted\":false,\"auto_mute_s\":10,"
+        "\"auto_armed\":false}";
+    ctl.publish_uplink(up_json, unmute_gen);
+    CHECK(ctl.copy_uplink(out.data(), out.size(), &required, &got) == 0);
+    CHECK(std::strcmp(out.data(), up_json) == 0);
+    CHECK_EQ_U(got, unmute_gen);
+    const char* clock_json = "{\"valid\":false,\"peer\":0}";
+    ctl.publish_clock(clock_json);
+    CHECK(ctl.copy_clock(out.data(), out.size(), &required) == 0);
+    CHECK(std::strcmp(out.data(), clock_json) == 0);
+    CHECK_EQ_U(required, std::strlen(clock_json) + 1);
+
+    // stop_run drops an un-taken uplink command; snapshots survive.
+    CHECK(ctl.enqueue_uplink(false, false, &gen) == 0);
+    ctl.stop_run();
+    CHECK(!ctl.take_uplink().has_value());
+    CHECK(ctl.copy_clock(out.data(), out.size(), &required) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -394,5 +473,6 @@ int main() {
     test_concurrent_publish_and_copy_stays_generation_coupled();
     test_control_tx_commands();
     test_stats_and_health_slots();
+    test_uplink_slot_and_clock();
     return wbtest_finish("rx_runtime_control_test");
 }

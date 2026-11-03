@@ -20,6 +20,7 @@ void RxRuntimeControl::stop_run() {
     const std::lock_guard<std::mutex> lock(mutex_);
     running_ = false;
     pending_.reset();
+    pending_uplink_.reset();
 }
 
 bool RxRuntimeControl::running() const {
@@ -152,6 +153,42 @@ uint64_t RxRuntimeControl::applied_generation() const {
     return applied_generation_;
 }
 
+int RxRuntimeControl::enqueue_uplink(bool tx, bool auto_mute,
+                                     uint64_t* generation) {
+    if (generation == nullptr || (auto_mute && !tx)) return 2;
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_) return 3;
+    if (next_generation_ == std::numeric_limits<uint64_t>::max()) return 1;
+    const uint64_t gen = ++next_generation_;
+    UplinkCommand cmd;
+    cmd.tx = tx;
+    cmd.auto_mute = auto_mute;
+    cmd.generation = gen;
+    pending_uplink_ = cmd;
+    *generation = gen;
+    return 0;
+}
+
+std::optional<RxRuntimeControl::UplinkCommand> RxRuntimeControl::take_uplink() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || !pending_uplink_) return std::nullopt;
+    const std::optional<UplinkCommand> out = pending_uplink_;
+    pending_uplink_.reset();
+    return out;
+}
+
+void RxRuntimeControl::note_uplink_applied(uint64_t generation) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (generation > uplink_applied_generation_) {
+        uplink_applied_generation_ = generation;
+    }
+}
+
+uint64_t RxRuntimeControl::uplink_applied_generation() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return uplink_applied_generation_;
+}
+
 bool RxRuntimeControl::take_scout_snapshot_request() {
     const std::lock_guard<std::mutex> lock(mutex_);
     const bool requested = scout_snapshot_requested_;
@@ -177,6 +214,20 @@ bool RxRuntimeControl::take_command_snapshot_request() {
     const std::lock_guard<std::mutex> lock(mutex_);
     const bool requested = command_snapshot_requested_;
     command_snapshot_requested_ = false;
+    return requested;
+}
+
+bool RxRuntimeControl::take_clock_snapshot_request() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const bool requested = clock_snapshot_requested_;
+    clock_snapshot_requested_ = false;
+    return requested;
+}
+
+bool RxRuntimeControl::take_uplink_snapshot_request() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const bool requested = uplink_snapshot_requested_;
+    uplink_snapshot_requested_ = false;
     return requested;
 }
 
@@ -358,6 +409,51 @@ int RxRuntimeControl::copy_control_endpoint(char* buffer, size_t capacity,
         snapshot = control_endpoint_;
     }
     return copy_snapshot_json(snapshot, buffer, capacity, required);
+}
+
+void RxRuntimeControl::publish_clock(std::string json) {
+    auto next = std::make_shared<const std::string>(std::move(json));
+    const std::lock_guard<std::mutex> lock(mutex_);
+    clock_snapshot_ = std::move(next);
+}
+
+void RxRuntimeControl::publish_uplink(std::string json, uint64_t generation) {
+    auto next =
+        std::make_shared<const GeneratedSnapshot>(std::move(json), generation);
+    const std::lock_guard<std::mutex> lock(mutex_);
+    uplink_snapshot_ = std::move(next);
+}
+
+int RxRuntimeControl::copy_clock(char* buffer, size_t capacity,
+                                 size_t* required) {
+    // Validate BEFORE the lock, as copy_scout does: a refused call must not
+    // arm the snapshot request.
+    if (required == nullptr || (buffer == nullptr && capacity != 0)) return 2;
+    std::shared_ptr<const std::string> snapshot;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        clock_snapshot_requested_ = true;
+        snapshot = clock_snapshot_;
+    }
+    return copy_snapshot_json(snapshot, buffer, capacity, required);
+}
+
+int RxRuntimeControl::copy_uplink(char* buffer, size_t capacity,
+                                  size_t* required, uint64_t* generation) {
+    if (required == nullptr || generation == nullptr ||
+        (buffer == nullptr && capacity != 0)) {
+        return 2;
+    }
+    std::shared_ptr<const GeneratedSnapshot> snapshot;
+    uint64_t applied = 0;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        uplink_snapshot_requested_ = true;
+        snapshot = uplink_snapshot_;
+        applied = uplink_applied_generation_;
+    }
+    return copy_generated_snapshot_json(snapshot, applied, buffer, capacity,
+                                        required, generation);
 }
 
 }  // namespace node

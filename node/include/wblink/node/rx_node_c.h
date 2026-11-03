@@ -389,6 +389,44 @@ int wblink_rx_command_status(wblink_rx *rx, char *buffer, size_t capacity,
                              uint64_t *applied_generation);
 
 /*
+ * Pass 216: the §3.16 clock and the §15.2 uplink mute, for a build with the
+ * control server compiled out. Each body is byte for byte what §15.5 serves,
+ * from the same generator:
+ *
+ *   wblink_rx_clock   GET /api/v1/clock   {"valid":B,"peer":N,"offset_us":N,
+ *                                          "delay_us":N,"samples":N,
+ *                                          "age_ms":N,"source":"...",...}
+ *   wblink_rx_uplink  GET /api/v1/uplink  {"tx_adapter":B,"muted":B,
+ *                                          "auto_mute_s":N,"auto_armed":B}
+ *
+ * Same buffer/return contract and fresh-publication request as the snapshot
+ * calls above: the loop serves the request on its next iteration, so a poller
+ * reads state at most one poll old. `age_ms` is as of that publication.
+ * `applied_generation` is the last APPLIED UPLINK generation — the uplink has
+ * its own slot, and a scout, claim or vehicle command never advances it.
+ */
+int wblink_rx_clock(wblink_rx *rx, char *buffer, size_t capacity,
+                    size_t *required);
+int wblink_rx_uplink(wblink_rx *rx, char *buffer, size_t capacity,
+                     size_t *required, uint64_t *applied_generation);
+
+/*
+ * Pass 216: POST /api/v1/uplink. `tx` 0 mutes, `tx` 1 unmutes and disarms
+ * the boot auto-mute; `tx` 1 with `auto_mute` 1 unmutes and RE-ARMS it
+ * (Pass 211). Queued and applied by the loop, in a slot of its own: it
+ * neither supersedes nor is superseded by a scout, claim or vehicle command,
+ * so a menu may unmute and then claim back to back.
+ *
+ * 0 queued, 2 invalid argument (`auto_mute` with `tx` 0), 3 no active run,
+ * 1 allocation failure. The loop's refusals (no role:"tx" adapter, re-arm
+ * with `auto_mute_s` 0) change nothing and are logged; the next
+ * wblink_rx_uplink at this generation shows why (`tx_adapter`,
+ * `auto_mute_s`).
+ */
+int wblink_rx_uplink_set(wblink_rx *rx, int tx, int auto_mute,
+                         uint64_t *generation);
+
+/*
  * Load `config_path` and run a receiving node until stopped. Blocks.
  *
  * ONE HANDLE RUNS ONCE. A second call on the same handle returns 3 and does

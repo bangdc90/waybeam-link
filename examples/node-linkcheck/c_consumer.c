@@ -100,6 +100,17 @@ int wblink_c_consumer_check(void) {
             wblink_rx_destroy(rx);
             return 1;
         }
+        /* Pass 216: clock and uplink, the only route to them in a build with
+         * the control server compiled out. */
+        if (wblink_rx_uplink_set(NULL, 1, 0, &generation) != 2 ||
+            wblink_rx_uplink_set(rx, 0, 1, &generation) != 2 ||
+            wblink_rx_uplink_set(rx, 1, 1, &generation) != 3 ||
+            wblink_rx_uplink(rx, NULL, 0, &required, &generation) != 3 ||
+            wblink_rx_clock(NULL, NULL, 0, &required) != 2 ||
+            wblink_rx_clock(rx, NULL, 0, &required) != 3) {
+            wblink_rx_destroy(rx);
+            return 1;
+        }
     }
     wblink_rx_destroy(rx);
 

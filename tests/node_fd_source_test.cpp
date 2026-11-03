@@ -202,6 +202,12 @@ void test_c_abi_set_adapter_fds() {
         CHECK(wblink_rx_health(rx, nullptr, 0, &required) == 3);
         CHECK(wblink_rx_control_endpoint(rx, nullptr, 0, &required) == 3);
         CHECK(wblink_rx_control_endpoint(nullptr, nullptr, 0, &required) == 2);
+        // Pass 216: the run published its final clock and uplink snapshots
+        // only if it reached the loop; this one never did.
+        uint64_t gen = 0;
+        CHECK(wblink_rx_clock(rx, nullptr, 0, &required) == 3);
+        CHECK(wblink_rx_uplink(rx, nullptr, 0, &required, &gen) == 3);
+        CHECK(wblink_rx_uplink_set(rx, 1, 0, &gen) == 3);  // run is over
     }
 
     // A reuse refusal (3) must not overwrite the real run's record.

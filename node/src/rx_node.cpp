@@ -1027,8 +1027,8 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
     uint32_t time_req_unanswered = 0;
     bool time_unanswered_logged = false;
     // §15.2 (Pass 208) policy.uplink.auto_mute_s: armed once at boot on a
-    // node that can transmit; fires once, and any POST /api/v1/uplink
-    // disarms it.
+    // node that can transmit; fires once, and any POST /api/v1/uplink (or
+    // wblink_rx_uplink_set, Pass 216) disarms it.
     bool auto_mute_armed = l.cfg.policy.uplink.auto_mute_s > 0 &&
                            air.value->iface()->has_tx();
     uint64_t mute_ready_since_ms = 0;
@@ -1744,6 +1744,56 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
         }
         return start_vehicle_command(cmd, arg);
     };
+    // Pass 216: §15.5 GET /api/v1/clock and GET/POST /api/v1/uplink, at run_rx
+    // scope so the C ABI (wblink_rx_clock / _uplink / _uplink_set) and REST
+    // share one generator — a receive-only build has no control server.
+    const auto build_clock_json = [&] {  // §15.5 GET /api/v1/clock (Pass 207)
+        const auto e = clock_sync.estimate(now_us());
+        if (!e) {
+            return "{\"valid\":false,\"peer\":" + std::to_string(clock_peer) +
+                   "}";
+        }
+        return "{\"valid\":true,\"peer\":" + std::to_string(clock_peer) +
+               ",\"offset_us\":" + std::to_string(e->offset_us) +
+               ",\"delay_us\":" + std::to_string(e->delay_us) +
+               ",\"samples\":" + std::to_string(e->samples) +
+               ",\"age_ms\":" +
+               std::to_string((now_us() - e->newest_t4_us) / 1000) +
+               ",\"source\":\"" + (e->beacon ? "beacon" : "two-way") + "\"" +
+               (clock_sync.d0_us()
+                    ? ",\"d0_us\":" + std::to_string(*clock_sync.d0_us())
+                    : std::string()) +
+               "}";
+    };
+    const bool uplink_tx = air.value->iface()->has_tx();
+    const auto build_uplink_json = [&] {  // §15.5 (Pass 208) ground uplink mute
+        if (!uplink_tx) {
+            return std::string("{\"tx_adapter\":false,\"muted\":true,"
+                               "\"auto_mute_s\":0,\"auto_armed\":false}");
+        }
+        return std::string("{\"tx_adapter\":true,\"muted\":") +
+               (air.value->tx_muted ? "true" : "false") +
+               ",\"auto_mute_s\":" +
+               std::to_string(l.cfg.policy.uplink.auto_mute_s) +
+               ",\"auto_armed\":" + (auto_mute_armed ? "true" : "false") + "}";
+    };
+    const auto set_uplink = [&](bool tx, bool rearm,
+                                const char* via) -> std::string {
+        if (!uplink_tx) return "no role:\"tx\" adapter on this node";
+        if (rearm && l.cfg.policy.uplink.auto_mute_s == 0) {
+            return "policy.uplink.auto_mute_s is 0: nothing to re-arm";
+        }
+        // Pass 211: re-arm = the boot rule again — mute once the stream is
+        // latched, no campaign is in flight and a full fresh two-way window
+        // has held auto_mute_s.
+        auto_mute_armed = rearm;
+        mute_ready_since_ms = 0;
+        air.value->tx_muted = !tx;
+        wb_logf("uplink: %s (%s)\n",
+                !tx ? "muted" : rearm ? "unmuted, auto-mute re-armed" : "unmuted",
+                via);
+        return "";
+    };
     // §15.5 REST control plane. RX/ground node owns the CSA trigger (replaces
     // the removed stdin trigger); profile/fec are TX-only knobs → null → 409.
     StatsSnapshot last_snap;
@@ -1785,25 +1835,7 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
         };
         h.scout_results = [&] { return scout.results_json(now_ms()); };
         h.selection_json = build_selection_json;
-        h.clock_json = [&] {  // §15.5 GET /api/v1/clock (Pass 207)
-            const auto e = clock_sync.estimate(now_us());
-            if (!e) {
-                return "{\"valid\":false,\"peer\":" +
-                       std::to_string(clock_peer) + "}";
-            }
-            return "{\"valid\":true,\"peer\":" + std::to_string(clock_peer) +
-                   ",\"offset_us\":" + std::to_string(e->offset_us) +
-                   ",\"delay_us\":" + std::to_string(e->delay_us) +
-                   ",\"samples\":" + std::to_string(e->samples) +
-                   ",\"age_ms\":" +
-                   std::to_string((now_us() - e->newest_t4_us) / 1000) +
-                   ",\"source\":\"" + (e->beacon ? "beacon" : "two-way") +
-                   "\"" +
-                   (clock_sync.d0_us()
-                        ? ",\"d0_us\":" + std::to_string(*clock_sync.d0_us())
-                        : std::string()) +
-                   "}";
-        };
+        h.clock_json = build_clock_json;  // Pass 216: shared with the C ABI
 #if WBLINK_RADIO
         if (air.value->radio != nullptr) {
             // §15.5 (Pass 209) per-adapter chip thermal meter (5 s sample).
@@ -1826,39 +1858,11 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
             };
         }
 #endif
-        if (air.value->iface()->has_tx()) {
-            // §15.5 (Pass 208) ground uplink mute.
-            h.uplink_json = [&] {
-                return std::string("{\"tx_adapter\":true,\"muted\":") +
-                       (air.value->tx_muted ? "true" : "false") +
-                       ",\"auto_mute_s\":" +
-                       std::to_string(l.cfg.policy.uplink.auto_mute_s) +
-                       ",\"auto_armed\":" +
-                       (auto_mute_armed ? "true" : "false") + "}";
-            };
-            h.uplink_set = [&](bool tx, bool rearm) -> std::string {
-                if (rearm && l.cfg.policy.uplink.auto_mute_s == 0) {
-                    return "policy.uplink.auto_mute_s is 0: nothing to re-arm";
-                }
-                // Pass 211: re-arm = the boot rule again — mute once the
-                // stream is latched, no campaign is in flight and a full
-                // fresh two-way window has held auto_mute_s.
-                auto_mute_armed = rearm;
-                mute_ready_since_ms = 0;
-                air.value->tx_muted = !tx;
-                wb_logf("uplink: %s (POST /api/v1/uplink)\n",
-                        !tx ? "muted" : rearm ? "unmuted, auto-mute re-armed" : "unmuted");
-                return "";
-            };
-        } else {
-            h.uplink_json = [] {
-                return std::string("{\"tx_adapter\":false,\"muted\":true,"
-                                   "\"auto_mute_s\":0,\"auto_armed\":false}");
-            };
-            h.uplink_set = [](bool, bool) -> std::string {
-                return "no role:\"tx\" adapter on this node";
-            };
-        }
+        // §15.5 (Pass 208) ground uplink mute; Pass 216: shared with the C ABI.
+        h.uplink_json = build_uplink_json;
+        h.uplink_set = [&](bool tx, bool rearm) {
+            return set_uplink(tx, rearm, "POST /api/v1/uplink");
+        };
         // Read-only MTU capability/state is available on every RX role,
         // including spectators and controlled caches.
         h.link_mtu_json = [&] {
@@ -2618,6 +2622,20 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                              : ",\"verdict\":" + command_verdict) +
                         "}",
                     command->generation);
+            }
+            // Pass 216: the uplink slot, taken beside the command slot so a
+            // menu's unmute-then-claim lands both in one iteration.
+            if (auto up = runtime_control->take_uplink()) {
+                const std::string error =
+                    set_uplink(up->tx, up->auto_mute, "C ABI");
+                runtime_control->note_uplink_applied(up->generation);
+                if (!error.empty()) {
+                    wb_logf("rx runtime control generation %llu: %s\n",
+                            static_cast<unsigned long long>(up->generation),
+                            error.c_str());
+                }
+                runtime_control->publish_uplink(build_uplink_json(),
+                                                up->generation);
             }
         }
         if (aim_log_enabled()) {
@@ -3731,6 +3749,14 @@ art.craft_adapter_fingerprint = craft_tally_fp;
                     "{\"campaign\":" + command_campaign_json() + "}",
                     generation);
             }
+            if (runtime_control->take_clock_snapshot_request()) {
+                runtime_control->publish_clock(build_clock_json());
+            }
+            if (runtime_control->take_uplink_snapshot_request()) {
+                runtime_control->publish_uplink(
+                    build_uplink_json(),
+                    runtime_control->uplink_applied_generation());
+            }
         }
         if (runtime_control != nullptr && now >= next_adapters_pub) {
             runtime_control->publish_adapters(
@@ -3860,6 +3886,9 @@ art.craft_adapter_fingerprint = craft_tally_fp;
         runtime_control->publish_selection(build_selection_json(), generation);
         runtime_control->publish_command(
             "{\"campaign\":" + command_campaign_json() + "}", generation);
+        runtime_control->publish_clock(build_clock_json());
+        runtime_control->publish_uplink(
+            build_uplink_json(), runtime_control->uplink_applied_generation());
     }
     // §10.7: shutdown is an exit like any other. Without this a SIGTERM
     // mid-run leaves the uplink adapter at the last probe power until some
