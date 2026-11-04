@@ -1765,6 +1765,29 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                     : std::string()) +
                "}";
     };
+    // Pass 219: §15.5 (Pass 209) GET /api/v1/thermal at run_rx scope, shared
+    // by REST and wblink_rx_thermal. thermal() is a copy of the 5 s sample.
+    const auto build_thermal_json = [&] {
+        std::string out = "{\"adapters\":[";
+#if WBLINK_RADIO
+        if (air.value->radio != nullptr) {
+            for (size_t i = 0; i < l.cfg.adapters.size(); ++i) {
+                const RadioAir::Thermal t = air.value->radio->thermal(i);
+                const AdapterCfg& a = l.cfg.adapters[i];
+                if (i) out += ",";
+                out += "{\"name\":\"" + a.name + "\",\"tx\":" +
+                       (a.role == Role::kTx ? "true" : "false") +
+                       ",\"sampled\":" + (t.sampled ? "true" : "false") +
+                       ",\"valid\":" + (t.valid ? "true" : "false") +
+                       ",\"raw\":" + std::to_string(t.raw) +
+                       ",\"baseline\":" + std::to_string(t.baseline) +
+                       ",\"delta\":" + std::to_string(t.delta) +
+                       ",\"bucket\":\"" + t.bucket + "\"}";
+            }
+        }
+#endif
+        return out + "]}";
+    };
     const bool uplink_tx = air.value->iface()->has_tx();
     const auto build_uplink_json = [&] {  // §15.5 (Pass 208) ground uplink mute
         if (!uplink_tx) {
@@ -1991,24 +2014,9 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
         h.clock_json = build_clock_json;  // Pass 216: shared with the C ABI
 #if WBLINK_RADIO
         if (air.value->radio != nullptr) {
-            // §15.5 (Pass 209) per-adapter chip thermal meter (5 s sample).
-            h.thermal_json = [&] {
-                std::string out = "{\"adapters\":[";
-                for (size_t i = 0; i < l.cfg.adapters.size(); ++i) {
-                    const RadioAir::Thermal t = air.value->radio->thermal(i);
-                    const AdapterCfg& a = l.cfg.adapters[i];
-                    if (i) out += ",";
-                    out += "{\"name\":\"" + a.name + "\",\"tx\":" +
-                           (a.role == Role::kTx ? "true" : "false") +
-                           ",\"sampled\":" + (t.sampled ? "true" : "false") +
-                           ",\"valid\":" + (t.valid ? "true" : "false") +
-                           ",\"raw\":" + std::to_string(t.raw) +
-                           ",\"baseline\":" + std::to_string(t.baseline) +
-                           ",\"delta\":" + std::to_string(t.delta) +
-                           ",\"bucket\":\"" + t.bucket + "\"}";
-                }
-                return out + "]}";
-            };
+            // §15.5 (Pass 209) per-adapter chip thermal meter (5 s sample);
+            // Pass 219: one generator, shared with the C ABI.
+            h.thermal_json = build_thermal_json;
         }
 #endif
         // §15.5 (Pass 208) ground uplink mute; Pass 216: shared with the C ABI.
@@ -3795,6 +3803,9 @@ art.craft_adapter_fingerprint = craft_tally_fp;
                     build_uplink_json(),
                     runtime_control->uplink_applied_generation());
             }
+            if (runtime_control->take_thermal_snapshot_request()) {
+                runtime_control->publish_thermal(build_thermal_json());
+            }
         }
         if (runtime_control != nullptr && now >= next_adapters_pub) {
             runtime_control->publish_adapters(
@@ -3927,6 +3938,7 @@ art.craft_adapter_fingerprint = craft_tally_fp;
         runtime_control->publish_clock(build_clock_json());
         runtime_control->publish_uplink(
             build_uplink_json(), runtime_control->uplink_applied_generation());
+        runtime_control->publish_thermal(build_thermal_json());
     }
     // §10.7: shutdown is an exit like any other. Without this a SIGTERM
     // mid-run leaves the uplink adapter at the last probe power until some

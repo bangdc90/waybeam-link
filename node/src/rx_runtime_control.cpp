@@ -291,6 +291,13 @@ bool RxRuntimeControl::take_uplink_snapshot_request() {
     return requested;
 }
 
+bool RxRuntimeControl::take_thermal_snapshot_request() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    const bool requested = thermal_snapshot_requested_;
+    thermal_snapshot_requested_ = false;
+    return requested;
+}
+
 void RxRuntimeControl::publish_scout(std::string json, uint64_t generation) {
     auto next =
         std::make_shared<const GeneratedSnapshot>(std::move(json), generation);
@@ -482,6 +489,25 @@ void RxRuntimeControl::publish_uplink(std::string json, uint64_t generation) {
         std::make_shared<const GeneratedSnapshot>(std::move(json), generation);
     const std::lock_guard<std::mutex> lock(mutex_);
     uplink_snapshot_ = std::move(next);
+}
+
+void RxRuntimeControl::publish_thermal(std::string json) {
+    auto next = std::make_shared<const std::string>(std::move(json));
+    const std::lock_guard<std::mutex> lock(mutex_);
+    thermal_snapshot_ = std::move(next);
+}
+
+int RxRuntimeControl::copy_thermal(char* buffer, size_t capacity,
+                                   size_t* required) {
+    // Validate before the lock: a refused call must not arm the request.
+    if (required == nullptr || (buffer == nullptr && capacity != 0)) return 2;
+    std::shared_ptr<const std::string> snapshot;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        thermal_snapshot_requested_ = true;
+        snapshot = thermal_snapshot_;
+    }
+    return copy_snapshot_json(snapshot, buffer, capacity, required);
 }
 
 int RxRuntimeControl::copy_clock(char* buffer, size_t capacity,

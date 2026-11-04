@@ -24,6 +24,29 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 219 — §15.5 thermal on the RX C ABI (2026-11-04)
+
+Operator ruling 2026-11-04 (android-ground SYS-012, SWR-014): the Android
+ground's OSD shows the ground cards' chip temperature as the Hi3536 OSD does,
+but `GET /api/v1/thermal` (Pass 209) is unreachable in a
+`WBLINK_CONTROL_SERVER=OFF` build. Same case as Pass 216.
+
+Ruled:
+
+1. `wblink_rx_thermal(rx, buffer, capacity, &required)` — the
+   `GET /api/v1/thermal` body, byte for byte (`{adapters:[{name, tx, sampled,
+   valid, raw, baseline, delta, bucket}]}`), under the snapshot buffer
+   contract; each copy requests a fresh publication. A radio-less air
+   backend serves `{"adapters":[]}` (REST has no route there, unchanged).
+2. One generator: the thermal lambda moves to `run_rx` scope and REST calls
+   the same one; REST still registers it only for a radio backend.
+3. Pure addition: no existing call, slot, route, wire format or JSON shape
+   changes; the sampling cadence (5 s on the poll path) is untouched.
+
+**Evidence.** Branch `impl/gk7205-hi3536-fpv`;
+`tests/rx_runtime_control_test.cpp` (request edge, round trip);
+`examples/node-linkcheck` compiles the header as C.
+
 ## Pass 218 — §15.4 `flags` bits 5–6: flight-controller state (2026-11-04)
 
 Operator ruling 2026-11-04 (android-ground SYS-020, SWR-031): the Android

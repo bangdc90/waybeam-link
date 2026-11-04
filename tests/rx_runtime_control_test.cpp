@@ -545,6 +545,34 @@ void test_channel_slot() {
     CHECK(ctl.copy_channel(out.data(), out.size(), &required, &got) == 0);
 }
 
+// Pass 219: the thermal snapshot has its own request edge, 3 before the
+// first publish, and a refused call arms nothing.
+void test_thermal_snapshot() {
+    RxRuntimeControl ctl;
+    std::array<char, 256> out{};
+    size_t required = 0;
+    CHECK(ctl.copy_thermal(out.data(), out.size(), nullptr) == 2);
+    CHECK(ctl.copy_thermal(nullptr, 8, &required) == 2);
+    CHECK(!ctl.take_thermal_snapshot_request());
+    CHECK(ctl.copy_thermal(nullptr, 0, &required) == 3);
+    CHECK(ctl.take_thermal_snapshot_request());
+    CHECK(!ctl.take_thermal_snapshot_request());
+    // The other snapshots' edges are not touched.
+    CHECK(!ctl.take_clock_snapshot_request());
+    CHECK(!ctl.take_uplink_snapshot_request());
+
+    const char* json =
+        "{\"adapters\":[{\"name\":\"rx0\",\"tx\":false,\"sampled\":true,"
+        "\"valid\":true,\"raw\":31,\"baseline\":28,\"delta\":3,"
+        "\"bucket\":\"warm\"}]}";
+    ctl.publish_thermal(json);
+    CHECK(ctl.copy_thermal(nullptr, 0, &required) == 0);
+    CHECK_EQ_U(required, std::strlen(json) + 1);
+    CHECK(ctl.copy_thermal(out.data(), out.size(), &required) == 0);
+    CHECK(std::strcmp(out.data(), json) == 0);
+    CHECK(ctl.take_thermal_snapshot_request());
+}
+
 }  // namespace
 
 int main() {
@@ -554,6 +582,7 @@ int main() {
     test_control_tx_commands();
     test_stats_and_health_slots();
     test_uplink_slot_and_clock();
+    test_thermal_snapshot();
     test_channel_slot();
     return wbtest_finish("rx_runtime_control_test");
 }

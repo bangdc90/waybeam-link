@@ -411,6 +411,21 @@ int wblink_rx_uplink(wblink_rx *rx, char *buffer, size_t capacity,
                      size_t *required, uint64_t *applied_generation);
 
 /*
+ * Pass 219: GET /api/v1/thermal, the per-adapter chip thermal meter
+ * (Pass 209), for a build with the control server compiled out:
+ *
+ *   {"adapters":[{"name":S,"tx":B,"sampled":B,"valid":B,"raw":N,
+ *                 "baseline":N,"delta":N,"bucket":"S"}, ...]}
+ *
+ * Byte for byte what §15.5 serves; `{"adapters":[]}` on a backend without a
+ * radio. Same buffer/return contract and fresh-publication request as the
+ * calls above. The meter itself is sampled every 5 s; `delta` is in Realtek
+ * meter units, not degrees.
+ */
+int wblink_rx_thermal(wblink_rx *rx, char *buffer, size_t capacity,
+                      size_t *required);
+
+/*
  * Pass 216: POST /api/v1/uplink. `tx` 0 mutes, `tx` 1 unmutes and disarms
  * the boot auto-mute; `tx` 1 with `auto_mute` 1 unmutes and RE-ARMS it
  * (Pass 211). Queued and applied by the loop, in a slot of its own: it

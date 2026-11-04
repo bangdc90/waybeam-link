@@ -129,6 +129,7 @@ class RxRuntimeControl {
     bool take_command_snapshot_request();
     bool take_clock_snapshot_request();   // Pass 216
     bool take_uplink_snapshot_request();  // Pass 216
+    bool take_thermal_snapshot_request();  // Pass 219
 
     // Publication swaps an immutable string. Scout generation names the
     // command state represented by that JSON and is returned atomically with
@@ -161,6 +162,9 @@ class RxRuntimeControl {
     // the uplink applied generation, never the scout/claim one.
     void publish_clock(std::string json);
     void publish_uplink(std::string json, uint64_t generation);
+    // Pass 219: the GET /api/v1/thermal body, from the control server's
+    // generator.
+    void publish_thermal(std::string json);
     // Pass 217: the verdict of the channel command that carried this
     // generation (the REST reply it would have got). Published once per
     // applied channel command, so there is no snapshot-request edge.
@@ -184,6 +188,7 @@ class RxRuntimeControl {
     int copy_clock(char* buffer, size_t capacity, size_t* required);
     int copy_uplink(char* buffer, size_t capacity, size_t* required,
                     uint64_t* generation);
+    int copy_thermal(char* buffer, size_t capacity, size_t* required);
     int copy_channel(char* buffer, size_t capacity, size_t* required,
                      uint64_t* generation);
 
@@ -205,6 +210,7 @@ class RxRuntimeControl {
     bool command_snapshot_requested_ = false;
     bool clock_snapshot_requested_ = false;
     bool uplink_snapshot_requested_ = false;
+    bool thermal_snapshot_requested_ = false;
     std::shared_ptr<const GeneratedSnapshot> scout_snapshot_;
     std::shared_ptr<const std::string> discovery_snapshot_;
     std::shared_ptr<const std::string> adapters_snapshot_;
@@ -215,6 +221,7 @@ class RxRuntimeControl {
     std::shared_ptr<const std::string> control_endpoint_;
     std::shared_ptr<const std::string> clock_snapshot_;
     std::shared_ptr<const GeneratedSnapshot> uplink_snapshot_;
+    std::shared_ptr<const std::string> thermal_snapshot_;
     std::shared_ptr<const GeneratedSnapshot> channel_snapshot_;
 };
 

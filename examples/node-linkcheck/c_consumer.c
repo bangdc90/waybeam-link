@@ -107,7 +107,10 @@ int wblink_c_consumer_check(void) {
             wblink_rx_uplink_set(rx, 1, 1, &generation) != 3 ||
             wblink_rx_uplink(rx, NULL, 0, &required, &generation) != 3 ||
             wblink_rx_clock(NULL, NULL, 0, &required) != 2 ||
-            wblink_rx_clock(rx, NULL, 0, &required) != 3) {
+            wblink_rx_clock(rx, NULL, 0, &required) != 3 ||
+            /* Pass 219: thermal, same route. */
+            wblink_rx_thermal(NULL, NULL, 0, &required) != 2 ||
+            wblink_rx_thermal(rx, NULL, 0, &required) != 3) {
             wblink_rx_destroy(rx);
             return 1;
         }

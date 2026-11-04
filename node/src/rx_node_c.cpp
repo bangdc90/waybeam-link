@@ -219,6 +219,12 @@ int wblink_rx_clock(wblink_rx* rx, char* buffer, size_t capacity,
     return rx->runtime_control.copy_clock(buffer, capacity, required);
 }
 
+int wblink_rx_thermal(wblink_rx* rx, char* buffer, size_t capacity,
+                      size_t* required) {
+    if (rx == nullptr) return 2;
+    return rx->runtime_control.copy_thermal(buffer, capacity, required);
+}
+
 int wblink_rx_uplink(wblink_rx* rx, char* buffer, size_t capacity,
                      size_t* required, uint64_t* applied_generation) {
     if (rx == nullptr) return 2;
