@@ -24,6 +24,43 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 217 — §15.5 CSA and move on the RX C ABI (2026-11-04)
+
+Operator ruling 2026-11-04 (android-ground SWR-013, SWR-016): the Android
+ground's menu (the Hi3536 menu model) needs `POST /api/v1/csa` (Channel Save,
+and the class-0 claim before a §11.7 camera command) and `POST /api/v1/move`
+(OK on a Scan row: retune only this ground), and runs with
+`WBLINK_CONTROL_SERVER=OFF`. The operator's condition: the current protocol
+is not affected.
+
+Ruled:
+
+1. `wblink_rx_csa(rx, mhz, klass, &generation)` — `POST /api/v1/csa
+   {"mhz":N,"class":N}`; `wblink_rx_move(rx, mhz, &generation)` — `POST
+   /api/v1/move {"mhz":N}`. `mhz` 0 returns 2 (REST 400 "mhz required").
+2. Additions only. No existing call, slot, generation rule or JSON body
+   changes: the scout/claim/vehicle-command slot and its supersede rule, the
+   Pass 216 uplink slot, `wblink_rx_command_status` and every REST route stay
+   as they are. No wire, config-key or spec-section change.
+3. CSA and move share one new latest-intent "channel" slot with its own
+   applied generation (generations still come from the one counter). Both
+   name the channel the link should be on, so a newer one supersedes an
+   un-taken older one; neither touches the other slots. The loop takes it
+   after the uplink slot, so an unmute queued just before a CSA lands first,
+   as the Hi3536 menu's two sequential REST calls did.
+4. `wblink_rx_channel_status` copies the verdict of the last applied channel
+   command, the REST reply it would have got: `{"op":"csa"|"move","mhz":N,
+   "class":N,"code":N,"result":{...}}`, plus its applied generation; 3 before
+   the first. Progress (`claiming` -> committed or rolled back, `spectating`)
+   stays in `wblink_rx_selection`, as for a claim.
+5. One implementation: the csa and move handlers move to `run_rx` scope, out
+   of `#if WBLINK_CONTROL_SERVER`, and REST calls the same ones.
+
+**Evidence.** Branch `impl/gk7205-hi3536-fpv`;
+`tests/rx_runtime_control_test.cpp` (channel slot independence and
+supersede, verdict round trip); `examples/node-linkcheck` compiles the header
+as C.
+
 ## Pass 216 — §15.5 clock and uplink on the RX C ABI (2026-11-03)
 
 Operator ruling 2026-11-03 (android-ground SWR-013, SWR-023, SYS-017): the
