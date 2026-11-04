@@ -465,6 +465,86 @@ void test_uplink_slot_and_clock() {
     CHECK(ctl.copy_clock(out.data(), out.size(), &required) == 0);
 }
 
+// Pass 217: CSA and move share the channel slot; it is independent of the
+// command and uplink slots, and its verdict reads back generation-coupled.
+void test_channel_slot() {
+    RxRuntimeControl ctl;
+    uint64_t gen = 55;
+    CHECK(ctl.enqueue_csa(5805, 0, &gen) == 3);  // closed mailbox
+    CHECK(ctl.enqueue_move(5805, &gen) == 3);
+    CHECK_EQ_U(gen, 55);
+
+    ctl.start_run();
+    CHECK(ctl.enqueue_csa(0, 0, &gen) == 2);  // mhz required
+    CHECK(ctl.enqueue_move(0, &gen) == 2);
+    CHECK(ctl.enqueue_csa(5805, 0, nullptr) == 2);
+    CHECK(ctl.enqueue_move(5805, nullptr) == 2);
+    CHECK_EQ_U(gen, 55);
+
+    // Unmute, claim and CSA back to back: three slots, none supersedes
+    // another, one generation counter.
+    uint64_t up_gen = 0, claim_gen = 0, csa_gen = 0;
+    CHECK(ctl.enqueue_uplink(true, true, &up_gen) == 0);
+    CHECK(ctl.enqueue_claim(4242, 5805, &claim_gen) == 0);
+    CHECK(ctl.enqueue_csa(5825, 0, &csa_gen) == 0);
+    CHECK(up_gen < claim_gen && claim_gen < csa_gen);
+    CHECK(ctl.take_command().has_value());
+    CHECK(ctl.take_uplink().has_value());
+    auto ch = ctl.take_channel();
+    CHECK(ch.has_value());
+    if (ch) {
+        CHECK(ch->kind == RxRuntimeControl::ChannelKind::kCsa);
+        CHECK_EQ_U(ch->mhz, 5825);
+        CHECK_EQ_U(ch->klass, 0);
+        CHECK_EQ_U(ch->generation, csa_gen);
+    }
+    CHECK(!ctl.take_channel().has_value());
+
+    // Latest intent within the channel slot: a move supersedes an un-taken
+    // CSA (and the reverse), and keeps the class it was given (none).
+    uint64_t csa2 = 0, move_gen = 0;
+    CHECK(ctl.enqueue_csa(5745, 1, &csa2) == 0);
+    CHECK(ctl.enqueue_move(5785, &move_gen) == 0);
+    ch = ctl.take_channel();
+    CHECK(ch.has_value() && ch->kind == RxRuntimeControl::ChannelKind::kMove &&
+          ch->mhz == 5785 && ch->klass == 0 && ch->generation == move_gen);
+    CHECK(!ctl.take_command().has_value());  // the other slots stay empty
+    CHECK(!ctl.take_uplink().has_value());
+
+    // Applying it advances only the channel generation.
+    ctl.note_channel_applied(move_gen);
+    CHECK_EQ_U(ctl.channel_applied_generation(), move_gen);
+    CHECK_EQ_U(ctl.applied_generation(), 0);
+    CHECK_EQ_U(ctl.uplink_applied_generation(), 0);
+    ctl.note_applied(claim_gen);
+    CHECK_EQ_U(ctl.channel_applied_generation(), move_gen);
+
+    // Verdict: 3 before the first, then the published body at its generation.
+    std::array<char, 256> out{};
+    size_t required = 0;
+    uint64_t got = 0;
+    CHECK(ctl.copy_channel(out.data(), out.size(), nullptr, &got) == 2);
+    CHECK(ctl.copy_channel(out.data(), out.size(), &required, nullptr) == 2);
+    CHECK(ctl.copy_channel(nullptr, 0, &required, &got) == 3);
+    CHECK_EQ_U(got, move_gen);
+    const char* verdict =
+        "{\"op\":\"move\",\"mhz\":5785,\"class\":0,\"code\":200,"
+        "\"result\":{\"ok\":true}}";
+    ctl.publish_channel(verdict, move_gen);
+    CHECK(ctl.copy_channel(nullptr, 0, &required, &got) == 0);
+    CHECK_EQ_U(required, std::strlen(verdict) + 1);
+    CHECK(ctl.copy_channel(out.data(), 8, &required, &got) == 4);
+    CHECK(ctl.copy_channel(out.data(), out.size(), &required, &got) == 0);
+    CHECK(std::strcmp(out.data(), verdict) == 0);
+    CHECK_EQ_U(got, move_gen);
+
+    // stop_run drops an un-taken channel command; the verdict survives.
+    CHECK(ctl.enqueue_csa(5805, 0, &gen) == 0);
+    ctl.stop_run();
+    CHECK(!ctl.take_channel().has_value());
+    CHECK(ctl.copy_channel(out.data(), out.size(), &required, &got) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -474,5 +554,6 @@ int main() {
     test_control_tx_commands();
     test_stats_and_health_slots();
     test_uplink_slot_and_clock();
+    test_channel_slot();
     return wbtest_finish("rx_runtime_control_test");
 }

@@ -208,6 +208,10 @@ void test_c_abi_set_adapter_fds() {
         CHECK(wblink_rx_clock(rx, nullptr, 0, &required) == 3);
         CHECK(wblink_rx_uplink(rx, nullptr, 0, &required, &gen) == 3);
         CHECK(wblink_rx_uplink_set(rx, 1, 0, &gen) == 3);  // run is over
+        // Pass 217: same for the channel slot and its verdict.
+        CHECK(wblink_rx_csa(rx, 5805, 0, &gen) == 3);
+        CHECK(wblink_rx_move(rx, 5805, &gen) == 3);
+        CHECK(wblink_rx_channel_status(rx, nullptr, 0, &required, &gen) == 3);
     }
 
     // A reuse refusal (3) must not overwrite the real run's record.

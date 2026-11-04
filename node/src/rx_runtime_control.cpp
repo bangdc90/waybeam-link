@@ -21,6 +21,7 @@ void RxRuntimeControl::stop_run() {
     running_ = false;
     pending_.reset();
     pending_uplink_.reset();
+    pending_channel_.reset();
 }
 
 bool RxRuntimeControl::running() const {
@@ -187,6 +188,65 @@ void RxRuntimeControl::note_uplink_applied(uint64_t generation) {
 uint64_t RxRuntimeControl::uplink_applied_generation() const {
     const std::lock_guard<std::mutex> lock(mutex_);
     return uplink_applied_generation_;
+}
+
+namespace {
+
+int enqueue_channel_locked(bool running, uint64_t& next_generation,
+                           std::optional<RxRuntimeControl::ChannelCommand>& slot,
+                           RxRuntimeControl::ChannelCommand cmd,
+                           uint64_t* generation) {
+    if (!running) return 3;
+    if (next_generation == std::numeric_limits<uint64_t>::max()) return 1;
+    cmd.generation = ++next_generation;
+    slot = cmd;
+    *generation = cmd.generation;
+    return 0;
+}
+
+}  // namespace
+
+int RxRuntimeControl::enqueue_csa(uint16_t mhz, uint32_t klass,
+                                  uint64_t* generation) {
+    if (generation == nullptr || mhz == 0) return 2;
+    ChannelCommand cmd;
+    cmd.kind = ChannelKind::kCsa;
+    cmd.mhz = mhz;
+    cmd.klass = klass;
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return enqueue_channel_locked(running_, next_generation_, pending_channel_,
+                                  cmd, generation);
+}
+
+int RxRuntimeControl::enqueue_move(uint16_t mhz, uint64_t* generation) {
+    if (generation == nullptr || mhz == 0) return 2;
+    ChannelCommand cmd;
+    cmd.kind = ChannelKind::kMove;
+    cmd.mhz = mhz;
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return enqueue_channel_locked(running_, next_generation_, pending_channel_,
+                                  cmd, generation);
+}
+
+std::optional<RxRuntimeControl::ChannelCommand>
+RxRuntimeControl::take_channel() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || !pending_channel_) return std::nullopt;
+    const std::optional<ChannelCommand> out = pending_channel_;
+    pending_channel_.reset();
+    return out;
+}
+
+void RxRuntimeControl::note_channel_applied(uint64_t generation) {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    if (generation > channel_applied_generation_) {
+        channel_applied_generation_ = generation;
+    }
+}
+
+uint64_t RxRuntimeControl::channel_applied_generation() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return channel_applied_generation_;
 }
 
 bool RxRuntimeControl::take_scout_snapshot_request() {
@@ -451,6 +511,30 @@ int RxRuntimeControl::copy_uplink(char* buffer, size_t capacity,
         uplink_snapshot_requested_ = true;
         snapshot = uplink_snapshot_;
         applied = uplink_applied_generation_;
+    }
+    return copy_generated_snapshot_json(snapshot, applied, buffer, capacity,
+                                        required, generation);
+}
+
+void RxRuntimeControl::publish_channel(std::string json, uint64_t generation) {
+    auto next =
+        std::make_shared<const GeneratedSnapshot>(std::move(json), generation);
+    const std::lock_guard<std::mutex> lock(mutex_);
+    channel_snapshot_ = std::move(next);
+}
+
+int RxRuntimeControl::copy_channel(char* buffer, size_t capacity,
+                                   size_t* required, uint64_t* generation) {
+    if (required == nullptr || generation == nullptr ||
+        (buffer == nullptr && capacity != 0)) {
+        return 2;
+    }
+    std::shared_ptr<const GeneratedSnapshot> snapshot;
+    uint64_t applied = 0;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        snapshot = channel_snapshot_;
+        applied = channel_applied_generation_;
     }
     return copy_generated_snapshot_json(snapshot, applied, buffer, capacity,
                                         required, generation);

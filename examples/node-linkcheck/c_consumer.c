@@ -111,6 +111,20 @@ int wblink_c_consumer_check(void) {
             wblink_rx_destroy(rx);
             return 1;
         }
+        /* Pass 217: CSA and move, and their verdict readout. */
+        if (wblink_rx_csa(NULL, 5805, 0, &generation) != 2 ||
+            wblink_rx_csa(rx, 0, 0, &generation) != 2 ||
+            wblink_rx_csa(rx, 5805, 0, &generation) != 3 ||
+            wblink_rx_move(NULL, 5805, &generation) != 2 ||
+            wblink_rx_move(rx, 0, &generation) != 2 ||
+            wblink_rx_move(rx, 5805, &generation) != 3 ||
+            wblink_rx_channel_status(NULL, NULL, 0, &required,
+                                     &generation) != 2 ||
+            wblink_rx_channel_status(rx, NULL, 0, &required,
+                                     &generation) != 3) {
+            wblink_rx_destroy(rx);
+            return 1;
+        }
     }
     wblink_rx_destroy(rx);
 

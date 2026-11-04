@@ -237,6 +237,30 @@ int wblink_rx_uplink_set(wblink_rx* rx, int tx, int auto_mute,
         generation != nullptr ? generation : &ignored);
 }
 
+int wblink_rx_csa(wblink_rx* rx, uint16_t mhz, uint32_t klass,
+                  uint64_t* generation) {
+    if (rx == nullptr) return 2;
+    uint64_t ignored = 0;
+    return rx->runtime_control.enqueue_csa(
+        mhz, klass, generation != nullptr ? generation : &ignored);
+}
+
+int wblink_rx_move(wblink_rx* rx, uint16_t mhz, uint64_t* generation) {
+    if (rx == nullptr) return 2;
+    uint64_t ignored = 0;
+    return rx->runtime_control.enqueue_move(
+        mhz, generation != nullptr ? generation : &ignored);
+}
+
+int wblink_rx_channel_status(wblink_rx* rx, char* buffer, size_t capacity,
+                             size_t* required, uint64_t* applied_generation) {
+    if (rx == nullptr) return 2;
+    uint64_t ignored = 0;
+    return rx->runtime_control.copy_channel(
+        buffer, capacity, required,
+        applied_generation != nullptr ? applied_generation : &ignored);
+}
+
 int wblink_rx_selection(wblink_rx* rx, char* buffer, size_t capacity,
                         size_t* required, uint64_t* applied_generation) {
     if (rx == nullptr) return 2;

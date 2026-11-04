@@ -1794,6 +1794,159 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                 via);
         return "";
     };
+    // Pass 217: the §15.5 /csa and /move handlers, at run_rx scope so the C
+    // ABI's channel slot (wblink_rx_csa / wblink_rx_move) and REST run the one
+    // implementation. Each carries the cache-assignment refusal its REST
+    // registration gets from the `if (!cache_assignment_gate)` below, like
+    // do_claim (see the header comment above it).
+    const auto do_csa = [&](uint32_t mhz,
+                            uint32_t klass) -> std::pair<int, std::string> {
+        const auto err = [](int code, const char* msg) {
+            return std::pair<int, std::string>{
+                code, std::string("{\"ok\":false,\"error\":\"") + msg +
+                          "\"}"};
+        };
+        if (cache_assignment_gate) {
+            return err(409, "controlled cache cannot switch channel");
+        }
+        if (!air.value->supports_csa()) {
+            return err(400, "CSA unsupported by this air backend");
+        }
+        // §15.5a / B9: re-key from the craft's LIVE announced token
+        // before every campaign. do_claim keyed the issuer once, but the
+        // craft regenerates its token each boot — a reboot since the
+        // claim leaves that key stale and the craft silently drops the
+        // §11.4 MAC, so the switch dies with a bare {"ok":true}. The
+        // configured-secret path is stable; skip it there.
+        if (cparams.psk.empty()) {
+            // Pass 108: two distinct refusals, previously conflated into
+            // one "rebooted? re-scout" string that sent operators to
+            // re-scout a healthy link. Nothing selected is a 409 like
+            // every other unbound-craft refusal; selected-but-keyless
+            // stays a 400.
+            if (active_selection.originator == 0) {
+                return err(409,
+                           "no craft selected (nothing latched, no "
+                           "claim)");
+            }
+            const auto tok =
+                discovery.token_for(active_selection.originator);
+            if (!tok) {
+                return err(400,
+                           "no live CSA key for craft (secret-mode, or "
+                           "not heard for >5 s)");
+            }
+            std::vector<uint8_t> key(tok->begin(), tok->end());
+            if (!issuer.set_psk(key)) {
+                return err(409, "claim busy (campaign active)");
+            }
+        }
+        const CommonPrefix pre{l.cfg.node.originator, 0, session};
+        last_csa_target = static_cast<uint16_t>(mhz);
+        if (issuer.start(pre, static_cast<uint16_t>(mhz), 0,
+                         static_cast<uint8_t>(klass != 0),
+                         operating_chan, active_selection.bw, 4,
+                         now_us_it)) {
+            previous_selection = active_selection;
+            previous_selection_state = selection_state;
+            pending_selection = active_selection;
+            pending_selection->chan = static_cast<uint16_t>(mhz);
+            pending_selection->bw = 0;
+            // §11.6 (Pass 199): same craft, new channel — a failure
+            // here must put it back, not strand it.
+            campaign_intent = CampaignIntent::kRetune;
+            selection_state = "claiming";
+            return std::pair<int, std::string>{200, "{\"ok\":true}"};
+        }
+        return err(409,
+                   "rejected (active campaign, PSK, allowlist, or "
+                   "rate-limit)");
+    };
+    // §15.5 Pass 206: the operator's manual detach-and-retune. Unlike
+    // /csa (which moves the CRAFT and lets the ground follow), this only
+    // moves THIS ground's radio, to any channel (operator override, not
+    // allowlist-restricted). It drops the §11.5a binding and any
+    // follower campaign, un-pins the engine's wants so the first craft
+    // to clear §2 admission is adopted, and reports "spectating".
+    const auto do_move = [&](int mhz) -> std::pair<int, std::string> {
+        const auto err = [](int code, const char* msg) {
+            return std::pair<int, std::string>{
+                code, std::string("{\"ok\":false,\"error\":\"") + msg +
+                          "\"}"};
+        };
+        if (cache_assignment_gate) {
+            return err(409, "controlled cache cannot move independently");
+        }
+        if (mhz <= 0) {
+            return err(400, "mhz required");
+        }
+        if (mhz > 0xFFFF) {
+            return err(400, "mhz out of range");
+        }
+        // The rx node has no campaign-cancel API, so a move cannot
+        // preempt an issuer campaign in flight — refuse rather than
+        // retune out from under a campaign that is still re-keying the
+        // channel we already left.
+        if (issuer.active()) {
+            return err(409, "CSA campaign active (issuer)");
+        }
+        if (vissuer.active()) {
+            return err(409, "vehicle command campaign active");
+        }
+        // Aborting a bi-directional calibration sends a §11.7
+        // CALIBRATE=0 over air, i.e. it STARTS a vehicle-command
+        // campaign — which a move must then not retune out from under.
+        // Refuse while the sequence engine owns the radio; a plain
+        // uplink calibration has no downlink phase and is cancelled
+        // below.
+        if (calib_seq.active()) {
+            return err(409, "calibration campaign active");
+        }
+        const uint16_t chan = static_cast<uint16_t>(mhz);
+        const uint16_t prev_chan = operating_chan;
+        // The retune is the only fallible step, so it runs before any
+        // detach: a 400 must not leave the engine un-pinned, or a scout
+        // sweep stranded on its last dwell with the filter still widened
+        // (tx /move orders it the same way). retune_all is not
+        // all-or-nothing, so on failure put the adapters back on the
+        // pre-move channel before reporting.
+        if (!air.value->retune_all(chan, op_bw_mhz, false)) {
+            air.value->retune_all(prev_chan, op_bw_mhz, false);
+            return err(400, "retune failed");
+        }
+        // Only safe AFTER the retune: a plain uplink calibration abort
+        // is side-effect-free, but this must not run before the only
+        // fallible step (a 400 has to leave the node untouched).
+        cancel_calibration("move");
+        if (scout.scanning()) {
+            scout.abandon(now_ms());
+        }
+        air.value->set_stamp_net_id(l.cfg.node.net_id.value_or(0));
+        air.value->set_filter_net_id(l.cfg.node.net_id);
+        follower.release_binding();
+        follower.clear_campaign();
+        rx.unpin_originator();
+        for (FrameOut& fo : frame_outs) {
+            fo.reasm->reset_stream();
+            fo.source.reset();
+        }
+        selected_craft_session = 0;
+        pending_selection.reset();
+        previous_selection.reset();
+        active_selection = LinkSelection{0, chan, bw_code(op_bw_mhz),
+                                         l.cfg.node.net_id};
+        operating_chan = chan;
+        selection_state = "spectating";
+        desired_cache_assignment.reset();
+        next_cache_assignment_ms = 0;
+        if (cache_ctl) cache_ctl->reset_link();
+        scout.set_rest_chan(operating_chan);
+        scout.set_rest_filter(active_selection.net_id);
+        wb_logf("move: detach + local retune -> %u MHz, spectating "
+                "(Pass 206)\n", chan);
+        record_channel(l.cfg, chan);  // §15.2 Pass 210
+        return {200, "{\"ok\":true}"};
+    };
     // §15.5 REST control plane. RX/ground node owns the CSA trigger (replaces
     // the removed stdin trigger); profile/fec are TX-only knobs → null → 409.
     StatsSnapshot last_snap;
@@ -2314,148 +2467,8 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                 if (result.first == 200) mtu_reissue_pending = false;
                 return result;
             };
-            h.csa = [&](uint32_t mhz,
-                        uint32_t klass) -> std::pair<int, std::string> {
-                const auto err = [](int code, const char* msg) {
-                    return std::pair<int, std::string>{
-                        code, std::string("{\"ok\":false,\"error\":\"") + msg +
-                                  "\"}"};
-                };
-                if (!air.value->supports_csa()) {
-                    return err(400, "CSA unsupported by this air backend");
-                }
-                // §15.5a / B9: re-key from the craft's LIVE announced token
-                // before every campaign. do_claim keyed the issuer once, but the
-                // craft regenerates its token each boot — a reboot since the
-                // claim leaves that key stale and the craft silently drops the
-                // §11.4 MAC, so the switch dies with a bare {"ok":true}. The
-                // configured-secret path is stable; skip it there.
-                if (cparams.psk.empty()) {
-                    // Pass 108: two distinct refusals, previously conflated into
-                    // one "rebooted? re-scout" string that sent operators to
-                    // re-scout a healthy link. Nothing selected is a 409 like
-                    // every other unbound-craft refusal; selected-but-keyless
-                    // stays a 400.
-                    if (active_selection.originator == 0) {
-                        return err(409,
-                                   "no craft selected (nothing latched, no "
-                                   "claim)");
-                    }
-                    const auto tok =
-                        discovery.token_for(active_selection.originator);
-                    if (!tok) {
-                        return err(400,
-                                   "no live CSA key for craft (secret-mode, or "
-                                   "not heard for >5 s)");
-                    }
-                    std::vector<uint8_t> key(tok->begin(), tok->end());
-                    if (!issuer.set_psk(key)) {
-                        return err(409, "claim busy (campaign active)");
-                    }
-                }
-                const CommonPrefix pre{l.cfg.node.originator, 0, session};
-                last_csa_target = static_cast<uint16_t>(mhz);
-                if (issuer.start(pre, static_cast<uint16_t>(mhz), 0,
-                                 static_cast<uint8_t>(klass != 0),
-                                 operating_chan, active_selection.bw, 4,
-                                 now_us_it)) {
-                    previous_selection = active_selection;
-                    previous_selection_state = selection_state;
-                    pending_selection = active_selection;
-                    pending_selection->chan = static_cast<uint16_t>(mhz);
-                    pending_selection->bw = 0;
-                    // §11.6 (Pass 199): same craft, new channel — a failure
-                    // here must put it back, not strand it.
-                    campaign_intent = CampaignIntent::kRetune;
-                    selection_state = "claiming";
-                    return std::pair<int, std::string>{200, "{\"ok\":true}"};
-                }
-                return err(409,
-                           "rejected (active campaign, PSK, allowlist, or "
-                           "rate-limit)");
-            };
-            // §15.5 Pass 206: the operator's manual detach-and-retune. Unlike
-            // /csa (which moves the CRAFT and lets the ground follow), this only
-            // moves THIS ground's radio, to any channel (operator override, not
-            // allowlist-restricted). It drops the §11.5a binding and any
-            // follower campaign, un-pins the engine's wants so the first craft
-            // to clear §2 admission is adopted, and reports "spectating".
-            h.move = [&](int mhz) -> std::pair<int, std::string> {
-                const auto err = [](int code, const char* msg) {
-                    return std::pair<int, std::string>{
-                        code, std::string("{\"ok\":false,\"error\":\"") + msg +
-                                  "\"}"};
-                };
-                if (mhz <= 0) {
-                    return err(400, "mhz required");
-                }
-                if (mhz > 0xFFFF) {
-                    return err(400, "mhz out of range");
-                }
-                // The rx node has no campaign-cancel API, so a move cannot
-                // preempt an issuer campaign in flight — refuse rather than
-                // retune out from under a campaign that is still re-keying the
-                // channel we already left.
-                if (issuer.active()) {
-                    return err(409, "CSA campaign active (issuer)");
-                }
-                if (vissuer.active()) {
-                    return err(409, "vehicle command campaign active");
-                }
-                // Aborting a bi-directional calibration sends a §11.7
-                // CALIBRATE=0 over air, i.e. it STARTS a vehicle-command
-                // campaign — which a move must then not retune out from under.
-                // Refuse while the sequence engine owns the radio; a plain
-                // uplink calibration has no downlink phase and is cancelled
-                // below.
-                if (calib_seq.active()) {
-                    return err(409, "calibration campaign active");
-                }
-                const uint16_t chan = static_cast<uint16_t>(mhz);
-                const uint16_t prev_chan = operating_chan;
-                // The retune is the only fallible step, so it runs before any
-                // detach: a 400 must not leave the engine un-pinned, or a scout
-                // sweep stranded on its last dwell with the filter still widened
-                // (tx /move orders it the same way). retune_all is not
-                // all-or-nothing, so on failure put the adapters back on the
-                // pre-move channel before reporting.
-                if (!air.value->retune_all(chan, op_bw_mhz, false)) {
-                    air.value->retune_all(prev_chan, op_bw_mhz, false);
-                    return err(400, "retune failed");
-                }
-                // Only safe AFTER the retune: a plain uplink calibration abort
-                // is side-effect-free, but this must not run before the only
-                // fallible step (a 400 has to leave the node untouched).
-                cancel_calibration("move");
-                if (scout.scanning()) {
-                    scout.abandon(now_ms());
-                }
-                air.value->set_stamp_net_id(l.cfg.node.net_id.value_or(0));
-                air.value->set_filter_net_id(l.cfg.node.net_id);
-                follower.release_binding();
-                follower.clear_campaign();
-                rx.unpin_originator();
-                for (FrameOut& fo : frame_outs) {
-                    fo.reasm->reset_stream();
-                    fo.source.reset();
-                }
-                selected_craft_session = 0;
-                pending_selection.reset();
-                previous_selection.reset();
-                active_selection = LinkSelection{0, chan, bw_code(op_bw_mhz),
-                                                 l.cfg.node.net_id};
-                operating_chan = chan;
-                selection_state = "spectating";
-                desired_cache_assignment.reset();
-                next_cache_assignment_ms = 0;
-                if (cache_ctl) cache_ctl->reset_link();
-                scout.set_rest_chan(operating_chan);
-                scout.set_rest_filter(active_selection.net_id);
-                wb_logf("move: detach + local retune -> %u MHz, spectating "
-                        "(Pass 206)\n", chan);
-                record_channel(l.cfg, chan);  // §15.2 Pass 210
-                return {200, "{\"ok\":true}"};
-            };
+            h.csa = do_csa;
+            h.move = do_move;
         }
         h.video_recover = [&](int stream_id) {
             return rx.request_recovery(stream_id, inject_return);
@@ -2636,6 +2649,31 @@ int run_rx(Loaded& l, const std::atomic<int>& stop,
                 }
                 runtime_control->publish_uplink(build_uplink_json(),
                                                 up->generation);
+            }
+            // Pass 217: the channel slot (wblink_rx_csa / wblink_rx_move),
+            // after the uplink slot so an unmute queued just before a CSA
+            // lands first. The verdict is the REST reply; progress is the
+            // selection snapshot, republished here at the same edge.
+            if (auto ch = runtime_control->take_channel()) {
+                const bool csa =
+                    ch->kind == RxRuntimeControl::ChannelKind::kCsa;
+                const auto [code, body] =
+                    csa ? do_csa(ch->mhz, ch->klass) : do_move(ch->mhz);
+                runtime_control->note_channel_applied(ch->generation);
+                if (code != 200) {
+                    wb_logf("rx runtime control generation %llu: %s\n",
+                            static_cast<unsigned long long>(ch->generation),
+                            body.c_str());
+                }
+                runtime_control->publish_channel(
+                    std::string("{\"op\":\"") + (csa ? "csa" : "move") +
+                        "\",\"mhz\":" + std::to_string(ch->mhz) +
+                        ",\"class\":" + std::to_string(ch->klass) +
+                        ",\"code\":" + std::to_string(code) +
+                        ",\"result\":" + body + "}",
+                    ch->generation);
+                runtime_control->publish_selection(
+                    build_selection_json(), runtime_control->applied_generation());
             }
         }
         if (aim_log_enabled()) {

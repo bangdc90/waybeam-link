@@ -101,6 +101,24 @@ class RxRuntimeControl {
     void note_uplink_applied(uint64_t generation);
     uint64_t uplink_applied_generation() const;
 
+    // Pass 217: §15.5 POST /api/v1/csa and /api/v1/move share one more
+    // latest-intent slot, the "channel" slot: both name the channel the link
+    // should be on, so a newer one supersedes an un-taken older one, and
+    // neither touches the command or uplink slot. Own applied generation,
+    // generations from the one counter. `mhz` 0 is 2 (REST 400).
+    enum class ChannelKind { kCsa, kMove };
+    struct ChannelCommand {
+        ChannelKind kind = ChannelKind::kCsa;
+        uint16_t mhz = 0;
+        uint32_t klass = 0;  // kCsa: §11 class, as POST /csa "class"
+        uint64_t generation = 0;
+    };
+    int enqueue_csa(uint16_t mhz, uint32_t klass, uint64_t* generation);
+    int enqueue_move(uint16_t mhz, uint64_t* generation);
+    std::optional<ChannelCommand> take_channel();
+    void note_channel_applied(uint64_t generation);
+    uint64_t channel_applied_generation() const;
+
     // A reader requests a fresh snapshot as part of every copy attempt. The
     // RX loop consumes these edge flags and serializes loop-owned state on its
     // own thread. A request arriving after a take remains set for the next
@@ -143,6 +161,10 @@ class RxRuntimeControl {
     // the uplink applied generation, never the scout/claim one.
     void publish_clock(std::string json);
     void publish_uplink(std::string json, uint64_t generation);
+    // Pass 217: the verdict of the channel command that carried this
+    // generation (the REST reply it would have got). Published once per
+    // applied channel command, so there is no snapshot-request edge.
+    void publish_channel(std::string json, uint64_t generation);
 
     // Buffer-copy contract for the C shim: `required` includes the trailing
     // NUL. NULL + zero is a size query. Returns 0 on success/query, 2 for bad
@@ -162,6 +184,8 @@ class RxRuntimeControl {
     int copy_clock(char* buffer, size_t capacity, size_t* required);
     int copy_uplink(char* buffer, size_t capacity, size_t* required,
                     uint64_t* generation);
+    int copy_channel(char* buffer, size_t capacity, size_t* required,
+                     uint64_t* generation);
 
   private:
     // GeneratedSnapshot moved to snapshot_copy.h with the copy contract
@@ -173,6 +197,8 @@ class RxRuntimeControl {
     std::optional<Command> pending_;
     uint64_t uplink_applied_generation_ = 0;
     std::optional<UplinkCommand> pending_uplink_;
+    uint64_t channel_applied_generation_ = 0;
+    std::optional<ChannelCommand> pending_channel_;
     bool scout_snapshot_requested_ = false;
     bool discovery_snapshot_requested_ = false;
     bool selection_snapshot_requested_ = false;
@@ -189,6 +215,7 @@ class RxRuntimeControl {
     std::shared_ptr<const std::string> control_endpoint_;
     std::shared_ptr<const std::string> clock_snapshot_;
     std::shared_ptr<const GeneratedSnapshot> uplink_snapshot_;
+    std::shared_ptr<const GeneratedSnapshot> channel_snapshot_;
 };
 
 }  // namespace node

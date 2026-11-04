@@ -427,6 +427,36 @@ int wblink_rx_uplink_set(wblink_rx *rx, int tx, int auto_mute,
                          uint64_t *generation);
 
 /*
+ * Pass 217: POST /api/v1/csa {"mhz":N,"class":N} and POST /api/v1/move
+ * {"mhz":N}, for a build with the control server compiled out. CSA moves the
+ * bound CRAFT to `mhz` (a §11 campaign; the ground follows; class 0 is also
+ * the claim before a §11.7 command); move retunes only THIS ground (Pass 206)
+ * and leaves it spectating.
+ *
+ * Queued and applied by the loop in one "channel" slot of their own: a newer
+ * csa/move supersedes an un-taken older one, and neither supersedes nor is
+ * superseded by a scout, claim, vehicle command or uplink command. The loop
+ * takes this slot after the uplink slot, so an unmute queued just before a
+ * CSA is applied first.
+ *
+ * 0 queued, 2 invalid argument (`mhz` 0), 3 no active run, 1 allocation
+ * failure. The loop's verdict, the REST reply, is copied by
+ * wblink_rx_channel_status:
+ *
+ *   {"op":"csa"|"move","mhz":N,"class":N,"code":N,"result":{...}}
+ *
+ * with the applied channel generation; 3 before the first channel command.
+ * Progress after a 200 (`claiming` -> committed or rolled back,
+ * `spectating`) is read from wblink_rx_selection.
+ */
+int wblink_rx_csa(wblink_rx *rx, uint16_t mhz, uint32_t klass,
+                  uint64_t *generation);
+int wblink_rx_move(wblink_rx *rx, uint16_t mhz, uint64_t *generation);
+int wblink_rx_channel_status(wblink_rx *rx, char *buffer, size_t capacity,
+                             size_t *required,
+                             uint64_t *applied_generation);
+
+/*
  * Load `config_path` and run a receiving node until stopped. Blocks.
  *
  * ONE HANDLE RUNS ONCE. A second call on the same handle returns 3 and does
