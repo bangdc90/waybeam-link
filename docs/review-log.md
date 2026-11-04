@@ -24,6 +24,30 @@ Pass 153. The two-tier split itself is defined in `CLAUDE.md` ("The law").
 
 ## Passes
 
+## Pass 218 — §15.4 `flags` bits 5–6: flight-controller state (2026-11-04)
+
+Operator ruling 2026-11-04 (android-ground SYS-020, SWR-031): the Android
+ground's "Record on arming" needs the FC's armed state, which only the camera
+reads (waybeam-osd owns the FC UART). The operator chose the frame metadata
+over a TELEMETRY stream or a new beacon type; condition as Pass 217: the
+current protocol is not affected.
+
+Ruled:
+
+1. §15.4 `flags` bit 5 = FC fresh (an autopilot HEARTBEAT within 3 s), bit 6
+   = FC armed (`MAV_MODE_FLAG_SAFETY_ARMED`), set by the producer; bit 6 only
+   with bit 5. Bit 7 stays reserved 0.
+2. Bit 5 clear means "no FC information", never "disarmed": no FC, MSP, an
+   older producer, or a §6.3b synthesized meta (whose `meta[5] &= GDR` already
+   clears both).
+3. Additions only. waybeam-link copies the bits and acts on none; every
+   current reader masks `flags` (FrameFramer bit 0/2, RX bit 0/3, §6.3b, the
+   Hi3536 and Android grounds). No code, wire, config or C-ABI change.
+
+**Evidence.** Branch `impl/gk7205-hi3536-fpv`; reader audit by grep of
+`flags`/`meta[5]` in core/, node/, ../hi3536dv100-ground/src,
+../android-ground/src (2026-11-04).
+
 ## Pass 217 — §15.5 CSA and move on the RX C ABI (2026-11-04)
 
 Operator ruling 2026-11-04 (android-ground SWR-013, SWR-016): the Android

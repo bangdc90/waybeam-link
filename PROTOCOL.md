@@ -6423,7 +6423,7 @@ codes preserved). Ring v2 had an 8-byte prefix (offsets 0–7 below, Annex-B at
 |---|---|---|---|
 | 0 | 4 | `pts` | u32; encoder capture timestamp (SDK units), truncated |
 | 4 | 1 | `codec` | u8; `0x01` = H.265 (only value emitted) |
-| 5 | 1 | `flags` | u8; bit 0 = IDR, bit 1 = GDR active, bit 2 = SVC-T enhancement layer, bit 3 = **salvaged** (§6.3b, set by RX — see below), bit 4 = **FEC-repaired** (§6.3a, set by RX — see below); other bits reserved 0 |
+| 5 | 1 | `flags` | u8; bit 0 = IDR, bit 1 = GDR active, bit 2 = SVC-T enhancement layer, bit 3 = **salvaged** (§6.3b, set by RX — see below), bit 4 = **FEC-repaired** (§6.3a, set by RX — see below), bit 5 = **FC fresh** and bit 6 = **FC armed** (producer-set, Pass 218 — see below); bit 7 reserved 0 |
 | 6 | 1 | `gdr_pos` | u8; zero-based GDR cycle position, 0 when inactive |
 | 7 | 1 | `gdr_len` | u8; GDR cycle length, 0 when inactive; when active `gdr_pos < gdr_len` |
 | 8 | 4 | `frame_seq` | u32; producer frame sequence, see below |
@@ -6484,6 +6484,20 @@ The Annex-B bytes are what was sent; only this bit differs. It tells a consumer
 that symbols were lost on the air and FEC repaired them — packet loss that is
 **not** frame loss and must not start any recovery. Like bit 3 it is never
 written by an encoder, and absence is not evidence of a clean air path.
+
+**`flags` bits 5–6 — flight-controller state (producer-set, Pass 218).** A
+producer that reads the craft's flight controller sets bit 5 (**FC fresh**)
+while a MAVLink HEARTBEAT from an autopilot has arrived within the last 3 s,
+and with it bit 6 (**FC armed**) = that HEARTBEAT's `base_mode`
+`MAV_MODE_FLAG_SAFETY_ARMED`. Bit 6 is meaningful only with bit 5 set; a
+producer never sets bit 6 alone. A frame with bit 5 clear carries **no FC
+information** (no FC, an FC protocol without the flag, a producer predating
+these bits, or a §6.3b synthesized meta, which carries both bits 0): it does
+not mean "disarmed", and a consumer keeps the state it last saw. waybeam-link
+only copies these bits — TX, the air, FEC, diversity dedup and §6.3a carry them
+untouched — and no node acts on them; a ground uses them for its own
+behaviour (e.g. record on arming). Like every other bit here they ride the
+opaque payload: no DATA-header, wire or config change.
 
 **In-process acceptance callback.** The C++ `FrameSink` and the additive C ABI
 acknowledgement callback return whether the synchronous consumer accepted the
